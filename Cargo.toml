@@ -1,0 +1,6 @@
+[package]
+name = "data-goblin"
+version = "0.1.0"
+authors = ["ikuehne <ikuehne617@gmail.com>"]
+
+[dependencies]
