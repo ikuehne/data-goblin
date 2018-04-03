@@ -92,7 +92,8 @@ impl<I: Iterator<Item = Result<char>>> Iterator for Lexer<I> {
                 ')' => self.next_unless_err(Tok::CloseParen),
                 c if c.is_lowercase() => self.lex_ident().map(Tok::Atom),
                 c if c.is_uppercase() => self.lex_ident().map(Tok::Variable),
-                _ => OptRes::err(self.err("unrecognized character"))
+                c => OptRes::err(Error::Lexer(
+                        format!("unrecognized character: {}", c)))
             })).0
     }
 }

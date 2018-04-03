@@ -1,5 +1,7 @@
 #![feature(io)]
 
+extern crate colored;
+
 pub mod ast;
 pub mod error;
 pub mod lexer;
@@ -16,6 +18,11 @@ fn main() {
             io::CharsError::NotUtf8 => error::Error::NotUtf8,
             io::CharsError::Other(e) => error::Error::Stream(e)
         })));
-    let toks: Vec<tok::Tok> = lexer.map(error::Result::unwrap).collect();
+    let toks: Vec<tok::Tok> = lexer.map(|r|
+                                        r.unwrap_or_else(|err| {
+                                            println!("{}.", err);
+                                            std::process::exit(1)
+                                        }))
+                                   .collect();
     println!("Tokens read: {:?}", toks)
 }
