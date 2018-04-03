@@ -1,8 +1,15 @@
+/// Converting character streams into token streams.
+
 use error::*;
 use tok::Tok;
 
 use std::iter::Iterator;
 
+/// Adapts an `Iterator` over `char`s to an iterator over `Tok`s.
+/// 
+/// More precisely, adapts an `Iterator` over `Result<char>`s to account for the
+/// possibility that the underlying stream fails. This allows, for example,
+/// lazily reading from an input stream.
 pub struct Lexer<I: Iterator<Item = Result<char>>> {
     current: Option<char>,
     chars: I
