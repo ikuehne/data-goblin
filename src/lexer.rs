@@ -71,7 +71,7 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
     }
 
     fn err(&self, msg: &str) -> Error {
-        Error::LexerError(msg.to_string())
+        Error::Lexer(msg.to_string())
     }
 }
 
