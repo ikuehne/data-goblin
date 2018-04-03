@@ -3,9 +3,7 @@
 mod ast;
 mod error;
 mod lexer;
-mod pos;
 mod tok;
-mod owning_chars;
 
 use std::io;
 use std::io::Read;

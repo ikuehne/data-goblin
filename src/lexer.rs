@@ -1,11 +1,7 @@
 use error::*;
 use tok::Tok;
 
-use std::io;
 use std::iter::Iterator;
-use std::result;
-
-type CharsResult = result::Result<char, io::CharsError>;
 
 pub struct Lexer<I: Iterator<Item = Result<char>>> {
     current: Option<char>,
@@ -63,6 +59,10 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
         self.append_ident(&mut result).and_then_ok(|| OptRes::ok(result))
     }
 
+    fn next_unless_err<T>(&mut self, x: T) -> OptRes<T> {
+        self.next_char().and_then_ok(|| OptRes::ok(x))
+    }
+
     fn err(&self, msg: &str) -> Error {
         Error::LexerError(msg.to_string())
     }
@@ -74,21 +74,15 @@ impl<I: Iterator<Item = Result<char>>> Iterator for Lexer<I> {
     fn next(&mut self) -> Option<Result<Tok>> {
         self.skip_whitespace()
             .and_then(|()| self.peek().and_then(|c| match c {
-                ',' => 
-                    self.next_char().and_then_ok(||
-                        OptRes::ok(Tok::Comma)),
-                '.' =>
-                    self.next_char().and_then_ok(||
-                        OptRes::ok(Tok::Dot)),
+                ',' => self.next_unless_err(Tok::Comma),
+                '.' => self.next_unless_err(Tok::Dot),
                 ':' => self.next_char().and_then(|c| match c {
-                    '-' =>
-                        self.next_char().and_then_ok(||
-                            OptRes::ok(Tok::Means)),
+                    '-' => self.next_unless_err(Tok::Means),
                     _ => OptRes::err(self.err("expected \"-\" in \":-\""))
                 }),
-                '?' =>
-                    self.next_char().and_then_ok(||
-                        OptRes::ok(Tok::Query)),
+                '?' => self.next_unless_err(Tok::Query),
+                '(' => self.next_unless_err(Tok::OpenParen),
+                ')' => self.next_unless_err(Tok::CloseParen),
                 c if c.is_lowercase() => self.lex_ident().map(Tok::Atom),
                 c if c.is_uppercase() => self.lex_ident().map(Tok::Variable),
                 _ => OptRes::err(self.err("unrecognized character"))
@@ -101,14 +95,6 @@ impl<I: Iterator<Item = Result<char>>> Iterator for Lexer<I> {
 struct OptRes<T>(Option<Result<T>>);
 
 impl<T> OptRes<T> {
-    fn none() -> Self {
-        OptRes(None)
-    }
-
-    fn opt(x: Option<T>) -> OptRes<T> {
-        OptRes(x.map(Ok))
-    }
-
     fn err(x: Error) -> Self {
         OptRes(Some(Err(x)))
     }
@@ -128,7 +114,7 @@ impl<T> OptRes<T> {
     fn and_then_ok<U, F: FnOnce() -> OptRes<U>>(self, op: F) -> OptRes<U> {
         match self.0 {
             Some(Err(e)) => OptRes::err(e),
-            other => op()
+            _ => op()
         }
     }
 
@@ -191,5 +177,32 @@ mod tests {
                    Some(vec!(Tok::Variable("VAR1".to_string()),
                              Tok::Variable("VAR_2".to_string()),
                              Tok::Variable("Var3".to_string()))));
+    }
+
+    #[test]
+    fn combined() {
+         assert_eq!(lex_test("rule(Var, atom) :- first(atom, Var),
+                                                 second(atom, atom)."),
+                    Some(vec!(Tok::Atom("rule".to_string()),
+                              Tok::OpenParen,
+                              Tok::Variable("Var".to_string()),
+                              Tok::Comma,
+                              Tok::Atom("atom".to_string()),
+                              Tok::CloseParen,
+                              Tok::Means,
+                              Tok::Atom("first".to_string()),
+                              Tok::OpenParen,
+                              Tok::Atom("atom".to_string()),
+                              Tok::Comma,
+                              Tok::Variable("Var".to_string()),
+                              Tok::CloseParen,
+                              Tok::Comma,
+                              Tok::Atom("second".to_string()),
+                              Tok::OpenParen,
+                              Tok::Atom("atom".to_string()),
+                              Tok::Comma,
+                              Tok::Atom("atom".to_string()),
+                              Tok::CloseParen,
+                              Tok::Dot)));
     }
 }
