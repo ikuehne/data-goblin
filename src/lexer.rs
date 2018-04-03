@@ -18,13 +18,11 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
     }
 
     fn peek(&mut self) -> OptRes<char> {
-        println!("In peek");
         self.current.map(OptRes::ok)
                     .unwrap_or_else(|| self.next_char())
     }
 
     fn next_char(&mut self) -> OptRes<char> {
-        println!("In next_char");
         match self.chars.next() {
             Some(Ok(x)) => {
                 self.current = Some(x);
@@ -38,7 +36,6 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
     }
 
     fn skip_whitespace(&mut self) -> OptRes<()> {
-        println!("In skip_whitespace");
         self.peek().and_then(|c|
             if c.is_whitespace() {
                 self.next_char().and_then(|_| self.skip_whitespace())
@@ -46,6 +43,24 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
                 OptRes::ok(())
             }
         )
+    }
+
+    fn append_ident(&mut self, result: &mut String) -> OptRes<()> {
+        self.peek().and_then(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                result.push(c);
+                self.next_char().and_then_ok(|| self.append_ident(result))
+            } else {
+                OptRes::ok(())
+            }
+        })
+
+    }
+
+    fn lex_ident(&mut self) -> OptRes<String> {
+        let mut result = String::new();
+
+        self.append_ident(&mut result).and_then_ok(|| OptRes::ok(result))
     }
 
     fn err(&self, msg: &str) -> Error {
@@ -57,8 +72,6 @@ impl<I: Iterator<Item = Result<char>>> Iterator for Lexer<I> {
     type Item = Result<Tok>;
 
     fn next(&mut self) -> Option<Result<Tok>> {
-        println!("called \"next\"");
-
         self.skip_whitespace()
             .and_then(|()| self.peek().and_then(|c| match c {
                 ',' => 
@@ -76,6 +89,8 @@ impl<I: Iterator<Item = Result<char>>> Iterator for Lexer<I> {
                 '?' =>
                     self.next_char().and_then_ok(||
                         OptRes::ok(Tok::Query)),
+                c if c.is_lowercase() => self.lex_ident().map(Tok::Atom),
+                c if c.is_uppercase() => self.lex_ident().map(Tok::Variable),
                 _ => OptRes::err(self.err("unrecognized character"))
             })).0
     }
@@ -148,6 +163,33 @@ mod tests {
     #[test]
     fn empty() {
         assert_eq!(lex_test(""), Some(vec!()));
-        assert_eq!(lex_test(""), Some(vec!()));
+        assert_eq!(lex_test("    "), Some(vec!()));
+        assert_eq!(lex_test(" \n\r\t"), Some(vec!()));
+    }
+
+    #[test]
+    fn atoms() {
+        assert_eq!(lex_test("a"), Some(vec!(Tok::Atom("a".to_string()))));
+        assert_eq!(lex_test("a_t_o_m"),
+                   Some(vec!(Tok::Atom("a_t_o_m".to_string()))));
+        assert_eq!(lex_test("aTOM"),
+                   Some(vec!(Tok::Atom("aTOM".to_string()))));
+        assert_eq!(lex_test(" atom1 atom_2 aTOM3"),
+                   Some(vec!(Tok::Atom("atom1".to_string()),
+                             Tok::Atom("atom_2".to_string()),
+                             Tok::Atom("aTOM3".to_string()))));
+    }
+
+    #[test]
+    fn vars() {
+        assert_eq!(lex_test("V"), Some(vec!(Tok::Variable("V".to_string()))));
+        assert_eq!(lex_test("V_A_R"),
+                   Some(vec!(Tok::Variable("V_A_R".to_string()))));
+        assert_eq!(lex_test("Var"),
+                   Some(vec!(Tok::Variable("Var".to_string()))));
+        assert_eq!(lex_test(" VAR1 VAR_2 Var3"),
+                   Some(vec!(Tok::Variable("VAR1".to_string()),
+                             Tok::Variable("VAR_2".to_string()),
+                             Tok::Variable("Var3".to_string()))));
     }
 }
