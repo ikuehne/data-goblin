@@ -2,7 +2,9 @@ use std::io;
 use std::result;
 
 pub enum Error {
-    IOError(io::Error)   
+    EncodingError(io::CharsError),
+    IOError(io::Error),
+    LexerError(String)
 }
 
 pub type Result<T> = result::Result<T, Error>;
