@@ -146,6 +146,8 @@ mod tests {
 
     #[test]
     fn symbols() {
+        assert_eq!(lex_test("("), Some(vec!(Tok::OpenParen)));
+        assert_eq!(lex_test(")"), Some(vec!(Tok::CloseParen)));
         assert_eq!(lex_test("?"), Some(vec!(Tok::Query)));
         assert_eq!(lex_test("."), Some(vec!(Tok::Dot)));
         assert_eq!(lex_test(","), Some(vec!(Tok::Comma)));
