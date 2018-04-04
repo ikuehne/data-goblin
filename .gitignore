@@ -10,3 +10,7 @@ Cargo.lock
 **/*.rs.bk
 
 /target/
+
+# Some vim and mac junk
+*.swp
+.DS_Store
