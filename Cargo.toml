@@ -4,4 +4,3 @@ version = "0.1.0"
 authors = ["ikuehne <ikuehne617@gmail.com>"]
 
 [dependencies]
-colored = "1.6.0"
