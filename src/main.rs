@@ -4,6 +4,7 @@ pub mod ast;
 pub mod error;
 pub mod lexer;
 pub mod tok;
+pub mod optres;
 
 use std::io;
 use std::io::Read;

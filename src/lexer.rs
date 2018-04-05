@@ -1,6 +1,7 @@
 /// Converting character streams into token streams.
 
 use error::*;
+use optres::OptRes;
 use tok::Tok;
 
 use std::iter::Iterator;
@@ -21,7 +22,7 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
     }
 
     fn peek(&mut self) -> OptRes<char> {
-        self.current.map(OptRes::ok)
+        self.current.map(OptRes::Good)
                     .unwrap_or_else(|| self.next_char())
     }
 
@@ -29,11 +30,11 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
         match self.chars.next() {
             Some(Ok(x)) => {
                 self.current = Some(x);
-                OptRes::ok(x)
+                OptRes::Good(x)
             }
             other => {
                 self.current = None;
-                OptRes(other)
+                OptRes::from(other)
             }
         }
     }
@@ -43,7 +44,7 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
             if c.is_whitespace() {
                 self.next_char().and_then(|_| self.skip_whitespace())
             } else {
-                OptRes::ok(())
+                OptRes::Good(())
             }
         )
     }
@@ -52,9 +53,9 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
         self.peek().and_then(|c| {
             if c.is_alphanumeric() || c == '_' {
                 result.push(c);
-                self.next_char().and_then_ok(|| self.append_ident(result))
+                self.next_char().unless_err(|| self.append_ident(result))
             } else {
-                OptRes::ok(())
+                OptRes::Good(())
             }
         })
 
@@ -63,11 +64,11 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
     fn lex_ident(&mut self) -> OptRes<String> {
         let mut result = String::new();
 
-        self.append_ident(&mut result).and_then_ok(|| OptRes::ok(result))
+        self.append_ident(&mut result).unless_err(|| OptRes::Good(result))
     }
 
     fn next_unless_err<T>(&mut self, x: T) -> OptRes<T> {
-        self.next_char().and_then_ok(|| OptRes::ok(x))
+        self.next_char().unless_err(|| OptRes::Good(x))
     }
 
     fn err(&self, msg: &str) -> Error {
@@ -85,49 +86,16 @@ impl<I: Iterator<Item = Result<char>>> Iterator for Lexer<I> {
                 '.' => self.next_unless_err(Tok::Dot),
                 ':' => self.next_char().and_then(|c| match c {
                     '-' => self.next_unless_err(Tok::Means),
-                    _ => OptRes::err(self.err("expected \"-\" in \":-\""))
+                    _ => OptRes::Bad(self.err("expected \"-\" in \":-\""))
                 }),
                 '?' => self.next_unless_err(Tok::Query),
                 '(' => self.next_unless_err(Tok::OpenParen),
                 ')' => self.next_unless_err(Tok::CloseParen),
                 c if c.is_lowercase() => self.lex_ident().map(Tok::Atom),
                 c if c.is_uppercase() => self.lex_ident().map(Tok::Variable),
-                c => OptRes::err(Error::Lexer(
+                c => OptRes::Bad(Error::Lexer(
                         format!("unrecognized character: {}", c)))
-            })).0
-    }
-}
-
-// We'll be doing a lot of mixed error handling. This struct makes chaining
-// operations on that much cleaner.
-struct OptRes<T>(Option<Result<T>>);
-
-impl<T> OptRes<T> {
-    fn err(x: Error) -> Self {
-        OptRes(Some(Err(x)))
-    }
-
-    fn ok(x: T) -> Self {
-        OptRes(Some(Ok(x)))
-    }
-
-    fn and_then<U, F: FnOnce(T) -> OptRes<U>> (self, op: F) -> OptRes<U> {
-        match self.0 {
-            Some(Ok(x)) => op(x),
-            Some(Err(e)) => OptRes(Some(Err(e))),
-            None => OptRes(None)
-        }
-    }
-
-    fn and_then_ok<U, F: FnOnce() -> OptRes<U>>(self, op: F) -> OptRes<U> {
-        match self.0 {
-            Some(Err(e)) => OptRes::err(e),
-            _ => op()
-        }
-    }
-
-    fn map<U, F: FnOnce(T) -> U> (self, op: F) -> OptRes<U> {
-        self.and_then(|x| OptRes::ok(op(x)))
+            })).into()
     }
 }
 
