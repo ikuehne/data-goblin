@@ -29,10 +29,12 @@ mod tests {
     use ast::*;
     use tok::Tok;
     use parser::Parser;
+    use std::vec;
 
     fn parse_test(x: Vec<Tok>) -> Option<Vec<Line>> {
-        Parser::new(x.map(Ok))
-            .map(|opt| match opt {
+        let tokenstream : vec::IntoIter<Tok> = x.into_iter();
+        let mut parser = Parser::new(tokenstream.map(Ok));
+        parser.map(|opt| match opt {
                 Ok(res) => Some(res),
                 _ => None
             }).collect()
@@ -83,6 +85,7 @@ mod tests {
 
     }
 
+    #[test]
     fn simple_rules() {
 
     }
