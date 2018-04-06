@@ -6,15 +6,16 @@ use optres::OptRes;
 use tok::Tok;
 
 use std::iter::Iterator;
+use std::iter::Peekable;
 
 
 pub struct Parser<I: Iterator<Item = Result<Tok>>> {
-    tokens: I
+    tokens: Peekable<I>
 }
 
 impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
     pub fn new(tokens: I) -> Self {
-        Parser { tokens: tokens }
+        Parser { tokens: tokens.peekable() }
     }
 
     fn next_token(&mut self) -> OptRes<Tok> {
@@ -30,11 +31,41 @@ impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
 
     // Greedily parse a term (take the largest term we can parse)
     fn parse_term(&mut self) -> OptRes<Term> {
-        OptRes::Done
+        self.next_token()
+            .and_then(|tok| {
+            match tok {
+                Tok::Atom(atom) => {
+            match self.tokens.peek() {
+                Some(Ok(Tok::OpenParen)) => {
+                    self.parse_atomic_term_list()
+                        .and_then(|inner|
+                            OptRes::from(Some(Ok(
+                                Term::Compound(
+                                CompoundTerm { relation: atom.to_string(), params: inner })))))
+                },
+                // TODO - figure out what next tokens are possible in the grammar
+                Some(Ok(Tok::Atom(atom))) => OptRes::from(Some(Ok(
+                            Term::Atomic(AtomicTerm::Atom(atom.to_string()))))),
+                Some(Ok(Tok::Variable(var))) => OptRes::from(Some(Ok(
+                            Term::Atomic(AtomicTerm::Variable(var.to_string()))))),
+                Some(Ok(x)) => OptRes::Bad(Error::Parser(
+                        format!("Unexpected token after atom: {:?}", x))),
+                // TODO - pass along the error even though peek returns a reference
+                Some(Err(_)) => OptRes::Bad(self.err("Error reading next token")),
+                None => OptRes::Done
+            }
+            },
+                _ => OptRes::from(Some(Err(self.err("Expected atomic term."))))
+            }
+            })
     }
 
     // Parse the body of a rule - a list of terms forming a conjunction
     fn parse_term_list(&mut self) -> OptRes<Vec<Term>> {
+        OptRes::Done
+    }
+
+    fn parse_atomic_term_list(&mut self) -> OptRes<Vec<AtomicTerm>> {
         OptRes::Done
     }
 
