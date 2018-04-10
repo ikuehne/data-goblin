@@ -53,3 +53,20 @@ impl<T> Into<Option<Result<T>>> for OptRes<T> {
         }
     }
 }
+
+#[macro_export]
+macro_rules! try_get {
+    ($expr:expr) => (match $expr {
+        $crate::optres::OptRes::Good(val) => val,
+        $crate::optres::OptRes::Bad(e) => return $crate::optres::OptRes::Bad(e),
+        $crate::optres::OptRes::Done => return $crate::optres::OptRes::Done
+    })
+}
+
+#[macro_export]
+macro_rules! try_do {
+    ($expr:expr) => (match $expr {
+        $crate::optres::OptRes::Bad(e) => return $crate::optres::OptRes::Bad(e),
+        _ => ()
+    })
+}

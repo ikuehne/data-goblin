@@ -40,39 +40,78 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
     }
 
     fn skip_whitespace(&mut self) -> OptRes<()> {
-        self.peek().and_then(|c|
+        loop {
+            let c = try_get!(self.peek());
             if c.is_whitespace() {
-                self.next_char().and_then(|_| self.skip_whitespace())
+                try_get!(self.next_char());
             } else {
-                OptRes::Good(())
+                return OptRes::Good(());
             }
-        )
+        }
     }
 
     fn append_ident(&mut self, result: &mut String) -> OptRes<()> {
-        self.peek().and_then(|c| {
+        loop {
+            let c = try_get!(self.peek());
             if c.is_alphanumeric() || c == '_' {
                 result.push(c);
-                self.next_char().unless_err(|| self.append_ident(result))
+                try_get!(self.next_char());
             } else {
-                OptRes::Good(())
+                return OptRes::Good(());
             }
-        })
-
+        }
     }
 
     fn lex_ident(&mut self) -> OptRes<String> {
         let mut result = String::new();
 
-        self.append_ident(&mut result).unless_err(|| OptRes::Good(result))
-    }
-
-    fn next_unless_err<T>(&mut self, x: T) -> OptRes<T> {
-        self.next_char().unless_err(|| OptRes::Good(x))
+        try_do!(self.append_ident(&mut result));
+        OptRes::Good(result)
     }
 
     fn err(&self, msg: &str) -> Error {
         Error::Lexer(msg.to_string())
+    }
+
+    fn next_optres(&mut self) -> OptRes<Tok> {
+        try_do!(self.skip_whitespace());
+        let c = try_get!(self.peek());
+        match c {
+            ',' => {
+                try_do!(self.next_char());
+                OptRes::Good(Tok::Comma)
+            }
+            '.' => {
+                try_do!(self.next_char());
+                OptRes::Good(Tok::Dot)
+            }
+            ':' => {
+                let c = try_get!(self.next_char());
+                match c {
+                    '-' => {
+                        try_do!(self.next_char());
+                        OptRes::Good(Tok::Means)
+                    }
+                    _ => OptRes::Bad(self.err("expected \"-\" in \":-\""))
+                }
+            }
+            '?' => {
+                try_do!(self.next_char());
+                OptRes::Good(Tok::Query)
+            }
+            '(' => {
+                try_do!(self.next_char());
+                OptRes::Good(Tok::OpenParen)
+            }
+            ')' => {
+                try_do!(self.next_char());
+                OptRes::Good(Tok::CloseParen)
+            }
+            c if c.is_lowercase() => self.lex_ident().map(Tok::Atom),
+            c if c.is_uppercase() => self.lex_ident().map(Tok::Variable),
+            c => OptRes::Bad(Error::Lexer(
+                    format!("unrecognized character: {}", c)))
+        }
     }
 }
 
@@ -80,22 +119,7 @@ impl<I: Iterator<Item = Result<char>>> Iterator for Lexer<I> {
     type Item = Result<Tok>;
 
     fn next(&mut self) -> Option<Result<Tok>> {
-        self.skip_whitespace()
-            .and_then(|()| self.peek().and_then(|c| match c {
-                ',' => self.next_unless_err(Tok::Comma),
-                '.' => self.next_unless_err(Tok::Dot),
-                ':' => self.next_char().and_then(|c| match c {
-                    '-' => self.next_unless_err(Tok::Means),
-                    _ => OptRes::Bad(self.err("expected \"-\" in \":-\""))
-                }),
-                '?' => self.next_unless_err(Tok::Query),
-                '(' => self.next_unless_err(Tok::OpenParen),
-                ')' => self.next_unless_err(Tok::CloseParen),
-                c if c.is_lowercase() => self.lex_ident().map(Tok::Atom),
-                c if c.is_uppercase() => self.lex_ident().map(Tok::Variable),
-                c => OptRes::Bad(Error::Lexer(
-                        format!("unrecognized character: {}", c)))
-            })).into()
+        self.next_optres().into()
     }
 }
 
