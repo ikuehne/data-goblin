@@ -29,35 +29,48 @@ impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
         }
     }
 
+    // Parse a term beginning with the given atom string.
+    // If the next token is an open paren, parse the compound term. Otherwise,
+    // just return an atomic term from that string.
+    fn term_from_atom(&mut self, atom: String) -> OptRes<Term> {
+        let next_token = self.tokens.peek();
+        // the token after an atom that begins a term should be either:
+        //  OpenParen - if the atom is a relation name
+        //  Query - if the atom is a query by itself
+        //  Comma - if the atom is in the parameters of a compound term
+        // TODO - are there more tokens that can follow an atom that begins a term?
+        // I'm pretty sure an atomic term can't be in the body list of a rule - that
+        // doesn't make much sense.
+        // Can an atom end with a dot? Single atom facts don't make sense to me.
+        match next_token {
+            Some(&Ok(Tok::OpenParen)) => {
+                let params = try_get!(self.parse_atomic_term_list());
+                OptRes::Good(Term::Compound(
+                        CompoundTerm { relation: atom.to_string(), params: params }))
+            },
+            Some(&Ok(Tok::Query)) => OptRes::Good(Term::Atomic(
+                    AtomicTerm::Atom(atom.to_string()))),
+            None => OptRes::Done,
+            Some(&Ok(ref x)) => OptRes::Bad(Error::Parser(
+                    format!("Unexpected token following atom: {:?}", x))),
+            // If we peek and see an error, we can just return the error by asking
+            // for the next token. Can't just return the error, because peeking gives
+            // us a reference.
+            Some(&Err(_)) => OptRes::Bad(self.err("Error reading a token"))
+        }
+    }
+
     // Greedily parse a term (take the largest term we can parse)
     fn parse_term(&mut self) -> OptRes<Term> {
-        self.next_token()
-            .and_then(|tok| {
-            match tok {
-                Tok::Atom(atom) => {
-            match self.tokens.peek() {
-                Some(Ok(Tok::OpenParen)) => {
-                    self.parse_atomic_term_list()
-                        .and_then(|inner|
-                            OptRes::from(Some(Ok(
-                                Term::Compound(
-                                CompoundTerm { relation: atom.to_string(), params: inner })))))
-                },
-                // TODO - figure out what next tokens are possible in the grammar
-                Some(Ok(Tok::Atom(atom))) => OptRes::from(Some(Ok(
-                            Term::Atomic(AtomicTerm::Atom(atom.to_string()))))),
-                Some(Ok(Tok::Variable(var))) => OptRes::from(Some(Ok(
-                            Term::Atomic(AtomicTerm::Variable(var.to_string()))))),
-                Some(Ok(x)) => OptRes::Bad(Error::Parser(
-                        format!("Unexpected token after atom: {:?}", x))),
-                // TODO - pass along the error even though peek returns a reference
-                Some(Err(_)) => OptRes::Bad(self.err("Error reading next token")),
-                None => OptRes::Done
-            }
-            },
-                _ => OptRes::from(Some(Err(self.err("Expected atomic term."))))
-            }
-            })
+        let tok = try_get!(self.next_token());
+        match tok {
+        
+            Tok::Atom(atom) => self.term_from_atom(atom),
+            Tok::Variable(var) => OptRes::from(Some(Ok(
+                        Term::Atomic(AtomicTerm::Variable(var))))),
+            _ => OptRes::Bad(Error::Parser(
+                    format!("Unexpected token at the start of a term: {:?}", tok)))
+        }
     }
 
     // Parse the body of a rule - a list of terms forming a conjunction
@@ -66,11 +79,41 @@ impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
     }
 
     fn parse_atomic_term_list(&mut self) -> OptRes<Vec<AtomicTerm>> {
-        OptRes::Done
+        // TODO - this doesn't need to be any different from parse_term_list,
+        // but if any of the terms is a compound term, it's a syntax error.
+        let list = try_get!(self.parse_term_list());
+        let mut atomic_terms = Vec::new();
+        for term in list {
+            match term {
+                Term::Atomic(at) => atomic_terms.push(at),
+                Term::Compound(_) => { return OptRes::Bad(
+                    self.err("Syntax Error: nested compound term.")); }
+            }
+        }
+        OptRes::Good(atomic_terms)
     }
 
     fn err(&self, msg: &str) -> Error {
         Error::Parser(msg.to_string())
+    }
+
+    fn next_optres(&mut self) -> OptRes<Line> {
+        let first_term = try_get!(self.parse_term());
+        let next_token = try_get!(self.next_token());
+        match next_token {
+            Tok::Dot => OptRes::Good(
+                Line::Rule(Rule { head: first_term, body: vec!() })),
+            Tok::Query => OptRes::Good(
+                Line::Query(first_term)),
+            Tok::Means => {
+                        
+                let term_list = try_get!(self.parse_term_list());
+                OptRes::Good(
+                    Line::Rule(Rule { head: first_term, body: term_list }))
+            },
+            _ => OptRes::Bad(Error::Parser(format!(
+                    "Unexpected token following a term. Token: {:?}", next_token)))
+        }
     }
 }
 
@@ -80,23 +123,7 @@ impl<I: Iterator<Item = Result<Tok>>> Iterator for Parser<I> {
     fn next(&mut self) -> Option<Result<Line>> {
         // First, parse a term. Then, by examining the next token
         // we know what kind of line we're looking at.
-        self.parse_term()
-            .and_then(|term| {
-        self.next_token()
-            .and_then(|token|
-            match token {
-                Tok::Dot => OptRes::Good(Line::Rule(Rule { head: term, body: vec!() })),
-                Tok::Query => OptRes::Good(Line::Query(term)),
-                Tok::Means => {
-                    self.parse_term_list()
-                        .and_then(|next_terms|
-                            OptRes::Good(
-                                Line::Rule(Rule { head: term, body: next_terms })))
-                },
-                _ => OptRes::Bad(Error::Parser(
-                        format!("Unexpected token after term: {:?}", token)))
-            })
-        }).into()
+        self.next_optres().into()
     }
 }
 
