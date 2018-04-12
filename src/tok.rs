@@ -1,4 +1,4 @@
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 
 /// Datalog lexical tokens.
 pub enum Tok {
