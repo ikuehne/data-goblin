@@ -74,7 +74,7 @@ impl<I: Iterator<Item = Result<char>>> Lexer<I> {
     }
 
     fn next_optres(&mut self) -> OptRes<Tok> {
-        try_do!(self.skip_whitespace());
+        try_get!(self.skip_whitespace());
         let c = try_get!(self.peek());
         match c {
             ',' => {
