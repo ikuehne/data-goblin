@@ -77,8 +77,11 @@ impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
     }
 
     // Parse the body of a rule - a list of terms forming a conjunction
+    // Assumes there will be at least one term.
     fn parse_term_list(&mut self) -> OptRes<Vec<Term>> {
         let mut terms = Vec::new();
+        let next_term = try_get!(self.parse_term());
+        terms.push(next_term);
         while let Some(Tok::Comma) = self.current {
             let next_term = try_get!(self.parse_term());
             terms.push(next_term);
@@ -87,8 +90,6 @@ impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
     }
 
     fn parse_atomic_term_list(&mut self) -> OptRes<Vec<AtomicTerm>> {
-        // TODO - this doesn't need to be any different from parse_term_list,
-        // but if any of the terms is a compound term, it's a syntax error.
         let list = try_get!(self.parse_term_list());
         let mut atomic_terms = Vec::new();
         for term in list {

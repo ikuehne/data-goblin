@@ -13,6 +13,7 @@ use std::io;
 use std::io::Read;
 
 fn main() {
+
     ast::AtomicTerm::Atom("hello".to_string());
     let stdin = io::BufReader::new(io::stdin());
     let lexer = lexer::Lexer::new(
@@ -26,5 +27,15 @@ fn main() {
                                             std::process::exit(1)
                                         }))
                                    .collect();
-    println!("Tokens read: {:?}", toks)
+    println!("Tokens read: {:?}", toks);
+
+    let parser = parser::Parser::new(toks.into_iter().map(Ok));
+    let lines: Vec<ast::Line> = parser.map(|l|
+                                        l.unwrap_or_else(|err| {
+                                            println!("{}.", err);
+                                            std::process::exit(1)
+                                        }))
+                                   .collect();
+    println!("Lines read: {:?}", lines);
+
 }
