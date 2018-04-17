@@ -42,5 +42,4 @@ fn main() {
         print!("{}", prompt);
         stdout().flush().unwrap();
     }
-    println!("Morituri te salutamus.");
 }

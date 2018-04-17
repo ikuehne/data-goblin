@@ -11,6 +11,7 @@ use std::slice;
 
 pub type Tuple<'a> = Vec<&'a str>;
 
+#[derive(Clone, Debug)]
 pub struct Table<'a> {
     name: &'a str,
     rows: Vec<Tuple<'a>>
@@ -34,6 +35,7 @@ impl<'a> IntoIterator for &'a mut Table<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct StorageEngine<'a> {
     tables: HashMap<&'a str, Table<'a>>
 }
