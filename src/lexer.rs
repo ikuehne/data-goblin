@@ -1,125 +1,114 @@
 /// Converting character streams into token streams.
 
 use error::*;
-use optres::OptRes;
 use tok::Tok;
 
 use std::iter::Iterator;
 
 /// Adapts an `Iterator` over `char`s to an iterator over `Tok`s.
-/// 
-/// More precisely, adapts an `Iterator` over `Result<char>`s to account for the
-/// possibility that the underlying stream fails. This allows, for example,
-/// lazily reading from an input stream.
-pub struct Lexer<I: Iterator<Item = Result<char>>> {
+pub struct Lexer<I: Iterator<Item = char>> {
     current: Option<char>,
     chars: I
 }
 
-impl<I: Iterator<Item = Result<char>>> Lexer<I> {
+impl<I: Iterator<Item = char>> Lexer<I> {
     pub fn new(chars: I) -> Self {
         Lexer { chars: chars, current: None }
     }
 
-    fn peek(&mut self) -> OptRes<char> {
-        self.current.map(OptRes::Good)
-                    .unwrap_or_else(|| self.next_char())
+    fn peek(&mut self) -> Option<char> {
+        let c = self.current.or_else(|| self.next_char());
+        c
     }
 
-    fn next_char(&mut self) -> OptRes<char> {
-        match self.chars.next() {
-            Some(Ok(x)) => {
-                self.current = Some(x);
-                OptRes::Good(x)
-            }
-            other => {
-                self.current = None;
-                OptRes::from(other)
-            }
+    fn next_char(&mut self) -> Option<char> {
+        self.chars.next().map(|c| {
+            self.current = Some(c);
+            c
+        }).or_else(|| {
+            self.current = None;
+            None
+        })
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.peek().filter(|c| c.is_whitespace()).is_some() {
+            self.next_char();
+            continue;
         }
     }
 
-    fn skip_whitespace(&mut self) -> OptRes<()> {
+    fn append_ident(&mut self, result: &mut String) {
         loop {
-            let c = try_get!(self.peek());
-            if c.is_whitespace() {
-                try_get!(self.next_char());
-            } else {
-                return OptRes::Good(());
+            match self.peek()
+                      .filter(|c| c.is_alphanumeric() || *c == '_')
+                      .and_then(|c| {
+                          result.push(c);
+                          self.next_char()
+                      }) {
+                Some(_) => continue,
+                None => return
             }
         }
     }
 
-    fn append_ident(&mut self, result: &mut String) -> OptRes<()> {
-        loop {
-            let c = try_get!(self.peek());
-            if c.is_alphanumeric() || c == '_' {
-                result.push(c);
-                try_get!(self.next_char());
-            } else {
-                return OptRes::Good(());
-            }
-        }
-    }
-
-    fn lex_ident(&mut self) -> OptRes<String> {
+    fn lex_ident(&mut self) -> String {
         let mut result = String::new();
 
-        try_do!(self.append_ident(&mut result));
-        OptRes::Good(result)
+        self.append_ident(&mut result);
+        result
     }
 
-    fn err(&self, msg: &str) -> Error {
-        Error::Lexer(msg.to_string())
+    fn unrecognized(c: char) -> Error {
+        Error::Lexer(format!("unrecognized character: {}", c))
     }
 
-    fn next_optres(&mut self) -> OptRes<Tok> {
-        try_get!(self.skip_whitespace());
-        let c = try_get!(self.peek());
-        match c {
-            ',' => {
-                try_do!(self.next_char());
-                OptRes::Good(Tok::Comma)
-            }
-            '.' => {
-                try_do!(self.next_char());
-                OptRes::Good(Tok::Dot)
-            }
-            ':' => {
-                let c = try_get!(self.next_char());
-                match c {
-                    '-' => {
-                        try_do!(self.next_char());
-                        OptRes::Good(Tok::Means)
-                    }
-                    _ => OptRes::Bad(self.err("expected \"-\" in \":-\""))
-                }
-            }
-            '?' => {
-                try_do!(self.next_char());
-                OptRes::Good(Tok::Query)
-            }
-            '(' => {
-                try_do!(self.next_char());
-                OptRes::Good(Tok::OpenParen)
-            }
-            ')' => {
-                try_do!(self.next_char());
-                OptRes::Good(Tok::CloseParen)
-            }
-            c if c.is_lowercase() => self.lex_ident().map(Tok::Atom),
-            c if c.is_uppercase() => self.lex_ident().map(Tok::Variable),
-            c => OptRes::Bad(Error::Lexer(
-                    format!("unrecognized character: {}", c)))
-        }
+    fn unexpected(c: char) -> Error {
+        Error::Lexer(format!("unexpected character: {}", c))
     }
 }
 
-impl<I: Iterator<Item = Result<char>>> Iterator for Lexer<I> {
+impl<I: Iterator<Item = char>> Iterator for Lexer<I> {
     type Item = Result<Tok>;
 
     fn next(&mut self) -> Option<Result<Tok>> {
-        self.next_optres().into()
+        self.skip_whitespace();
+        let c = self.peek()?;
+        match c {
+            ',' => {
+                self.next_char();
+                Some(Ok(Tok::Comma))
+            },
+            '.' => {
+                self.next_char();
+                Some(Ok(Tok::Dot))
+            },
+            ':' => {
+                let c = self.next_char()?;
+                match c {
+                    '-' => {
+                        self.next_char();
+                        Some(Ok(Tok::Means))
+                    }
+                    c => Some(Err(Self::unexpected(c)))
+                }
+            },
+            '?' => {
+                self.next_char();
+                Some(Ok(Tok::Query))
+            },
+            '(' => {
+                self.next_char();
+                Some(Ok(Tok::OpenParen))
+            },
+            ')' => {
+                self.next_char();
+                Some(Ok(Tok::CloseParen))
+            },
+            c if c.is_lowercase() => Some(Ok(Tok::Atom(self.lex_ident()))),
+            c if c.is_uppercase() => Some(Ok(Tok::Variable(self.lex_ident()))),
+            c => Some(Err(Self::unrecognized(c)))
+        }
     }
 }
 
@@ -129,11 +118,9 @@ mod tests {
     use lexer::Lexer;
 
     fn lex_test(x: &str) -> Option<Vec<Tok>> {
-        Lexer::new(x.chars().map(Ok))
-            .map(|opt| match opt {
-                Ok(res) => Some(res),
-                _ => None
-            }).collect()
+        Lexer::new(x.chars())
+            .map(Result::ok)
+            .collect()
     }
 
     #[test]

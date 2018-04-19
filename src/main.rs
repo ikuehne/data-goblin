@@ -1,4 +1,5 @@
 #![feature(io)]
+#![feature(option_filter)]
 
 #[macro_use]
 pub mod optres;
@@ -18,14 +19,15 @@ use std::io::Write;
 
 fn main() {
     let stdin = io::BufReader::new(io::stdin());
-    let lexer = lexer::Lexer::new(
-        stdin.chars().map(|res| res.map_err(|e| match e {
-            io::CharsError::NotUtf8 => error::Error::NotUtf8,
-            io::CharsError::Other(e) => error::Error::Stream(e)
-        })));
+    let chars = stdin.chars().map(|r| r.unwrap_or_else(|e| {
+        println!("Stream error: {}.", e);
+        std::process::exit(1)
+    }));
+
+    let lexer = lexer::Lexer::new(chars);
     let toks = lexer.map(|r|
                          r.unwrap_or_else(|err| {
-                             println!("{}.", err);
+                             println!("Lexer error: {}.", err);
                              std::process::exit(1)
                          }));
 
