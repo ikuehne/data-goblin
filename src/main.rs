@@ -16,7 +16,7 @@ use std::io::Write;
 use std::fmt::Display;
 
 fn abort<T: Display>(e: T) -> ! {
-    println!("Error: {}", e);
+    eprintln!("Error: {}", e);
     std::process::exit(1)
 }
 
@@ -28,10 +28,7 @@ fn main() {
     let toks = lexer.map(|r| r.unwrap_or_else(|e| abort(e)));
 
     let parser = parser::Parser::new(toks);
-    let lines = parser.map(|l| l.unwrap_or_else(|err| {
-        println!("{}.", err);
-        std::process::exit(1)
-    }));
+    let lines = parser.map(|l| l.unwrap_or_else(|e| abort(e)));
 
     let prompt = "data-goblin> ";
     print!("{}", prompt);
