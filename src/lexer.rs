@@ -17,8 +17,7 @@ impl<I: Iterator<Item = char>> Lexer<I> {
     }
 
     fn peek(&mut self) -> Option<char> {
-        let c = self.current.or_else(|| self.next_char());
-        c
+        self.current.or_else(|| self.next_char())
     }
 
     fn next_char(&mut self) -> Option<char> {
