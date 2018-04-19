@@ -64,7 +64,7 @@ impl Evaluator {
         }
     }
 
-    pub fn query<'i>(&'i self, query: ast::Term) -> Result<QueryResult<'i>> {
+    pub fn query(&self, query: ast::Term) -> Result<QueryResult> {
         let (head, rest) = Self::deconstruct_term(query)?;
 
         self.engine.get_table(&head).map(|r| match r {
