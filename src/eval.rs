@@ -11,9 +11,29 @@ pub struct Evaluator {
     engine: storage::StorageEngine
 }
 
+pub struct QueryParams {
+    params: Vec<ast::AtomicTerm>
+}
+
+impl QueryParams {
+    fn match_tuple(&mut self, t: &storage::Tuple) -> bool {
+        for i in 0..self.params.len() {
+            match self.params[i] {
+                ast::AtomicTerm::Atom(ref s) => {
+                    if *s != t[i] {
+                        return false;
+                    }
+                },
+                _ => ()
+            }
+        }
+        true
+    }
+}
+
 pub enum QueryResult<'i> {
     TableFound {
-        query: Vec<String>,
+        query: QueryParams,
         scan: storage::TableScan<'i>
     },
     NoTableFound
@@ -25,7 +45,7 @@ impl<'i> Iterator for QueryResult<'i> {
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             QueryResult::TableFound { query, scan } =>
-                scan.filter(|t| **t == *query).next(),
+                scan.filter(|t| query.match_tuple(t)).next(),
             QueryResult::NoTableFound => None
         }
     }
@@ -44,17 +64,26 @@ impl Evaluator {
         }
     }
 
-    fn deconstruct_term(t: ast::Term) -> Result<(String, Vec<String>)> {
+    fn deconstruct_term(t: ast::Term) -> Result<(String, QueryParams)> {
         match t {
-            ast::Term::Atomic(a) => Ok((Self::to_atom(a)?, Vec::new())),
+            ast::Term::Atomic(a) => Ok((Self::to_atom(a)?,
+                                        QueryParams { params :Vec::new() })),
             ast::Term::Compound(cterm) => {
                 let mut rest = Vec::new();
-                for param in cterm.params.into_iter().map(Self::to_atom) {
-                    rest.push(param?);
+                for param in cterm.params.into_iter() {
+                    rest.push(param);
                 }
-                Ok((cterm.relation, rest))
+                Ok((cterm.relation, QueryParams { params: rest }))
             }
         }
+    }
+
+    fn create_tuple(p: QueryParams) -> Result<storage::Tuple> {
+        let mut result = Vec::new();
+        for param in p.params {
+            result.push(Self::to_atom(param)?);
+        }
+        Ok(result)
     }
 
     pub fn query(&self, query: ast::Term) -> Result<QueryResult> {
@@ -71,8 +100,9 @@ impl Evaluator {
 
     pub fn simple_assert(&mut self, fact: ast::Term) -> Result<()> {
         let (head, rest) = Self::deconstruct_term(fact)?;
+        let tuple = Self::create_tuple(rest)?;
         match self.engine.get_or_create_table(head.clone()) {
-            Extension(t) => Ok(t.assert(rest)),
+            Extension(t) => Ok(t.assert(tuple)),
             Intension(_) => Err(Error::NotExtensional(head))
         }
     }

@@ -25,10 +25,8 @@ fn abort<T: Display>(e: T) -> ! {
 fn handle_line(evaluator: &mut eval::Evaluator, line: ast::Line) -> Result<()> {
     Ok(match line {
         ast::Line::Query(t) => {
-            if evaluator.query(t)?.next().is_some() {
-                println!("True.")
-            } else {
-                println!("False.")
+            for tuple in evaluator.query(t)? {
+                println!("{:?}", tuple);
             }
         },
         ast::Line::Rule(r) => evaluator.assert(r)?
