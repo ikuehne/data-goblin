@@ -5,35 +5,45 @@ use tok::Tok;
 
 use std::iter::Iterator;
 
+#[derive(Debug)]
+enum Buffer {
+    Uninitialized,
+    EOF,
+    Lexing(char)
+}
+
 /// Adapts an `Iterator` over `char`s to an iterator over `Tok`s.
 pub struct Lexer<I: Iterator<Item = char>> {
-    current: Option<char>,
+    current: Buffer,
     chars: I
 }
 
 impl<I: Iterator<Item = char>> Lexer<I> {
     pub fn new(chars: I) -> Self {
-        Lexer { chars: chars, current: None }
+        Lexer { chars: chars, current: Buffer::Uninitialized }
     }
 
     fn peek(&mut self) -> Option<char> {
-        self.current.or_else(|| self.next_char())
+        match self.current {
+            Buffer::Uninitialized => self.next_char(),
+            Buffer::EOF => None,
+            Buffer::Lexing(c) => Some(c)
+        }
     }
 
     fn next_char(&mut self) -> Option<char> {
         self.chars.next().map(|c| {
-            self.current = Some(c);
+            self.current = Buffer::Lexing(c);
             c
         }).or_else(|| {
-            self.current = None;
+            self.current = Buffer::EOF;
             None
         })
     }
 
     fn skip_whitespace(&mut self) {
-        while self.peek().filter(|c| c.is_whitespace()).is_some() {
+        while self.peek().map(|c| c.is_whitespace()).unwrap_or(false) {
             self.next_char();
-            continue;
         }
     }
 
