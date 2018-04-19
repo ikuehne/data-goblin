@@ -2,40 +2,44 @@
 
 use error::*;
 use ast::*;
-use optres::OptRes;
 use tok::Tok;
 
 use std::iter::Iterator;
 
+// A useful macro for dealing with Option<Result>s.
+macro_rules! try_get {
+    ($expr:expr) => (match $expr {
+        Some(Ok(val)) => val,
+        Some(Err(e)) => return Some(Err(e)),
+        None => return None
+    })
+}
 
-pub struct Parser<I: Iterator<Item = Result<Tok>>> {
+pub struct Parser<I: Iterator<Item = Tok>> {
     tokens: I,
     current: Option<Tok>
 }
 
-impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
+impl<I: Iterator<Item = Tok>> Parser<I> {
     pub fn new(tokens: I) -> Self {
         Parser { tokens: tokens, current: None }
     }
 
-    fn next_token(&mut self) -> OptRes<Tok> {
-        match self.tokens.next() {
-            Some(Ok(x)) => {
-                self.current = Some(x.clone());
-                OptRes::Good(x)
-            }
-            other => {
-                self.current = None;
-                OptRes::from(other)
-            }
-        }
+    fn next_token(&mut self) -> Option<Tok> {
+        self.tokens.next().map(|c| {
+            self.current = Some(c.clone());
+            c
+        }).or_else(|| {
+            self.current = None;
+            None
+        })
     }
 
     // Parse a term beginning with the given atom string.
     // If the next token is an open paren, parse the compound term. Otherwise,
     // just return an atomic term from that string.
-    fn term_from_atom(&mut self, atom: String) -> OptRes<Term> {
-        let next_token = try_get!(self.next_token());
+    fn term_from_atom(&mut self, atom: String) -> Option<Result<Term>> {
+        let next_token = self.next_token()?;
         // the token after an atom that begins a term should be either:
         //  OpenParen - if the atom is a relation name
         //  CloseParen - if the atom is at the end of the parameters list
@@ -46,39 +50,41 @@ impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
             Tok::OpenParen => {
                 let params = try_get!(self.parse_atomic_term_list());
                 // Advance past the final closing paren
-                try_do!(self.next_token());
-                OptRes::Good(Term::Compound(
-                        CompoundTerm { relation: atom.to_string(), params: params }))
+                self.next_token()?;
+                Some(Ok(Term::Compound(
+                            CompoundTerm {
+                                relation: atom.to_string(),
+                                params: params
+                            })))
             },
             Tok::Query | Tok::Dot | Tok::Comma | Tok::CloseParen
-                => OptRes::Good(Term::Atomic(AtomicTerm::Atom(atom.to_string()))),
-            other => OptRes::Bad(Error::Parser(
-                    format!("Unexpected token after an atom: {:?}", other)))
+                => Some(Ok(Term::Atomic(AtomicTerm::Atom(atom.to_string())))),
+            other => Some(Err(Error::Parser(
+                    format!("Unexpected token after an atom: {:?}", other))))
 
         }
     }
 
     // Greedily parse a term (take the largest term we can parse)
-    fn parse_term(&mut self) -> OptRes<Term> {
-        let tok = try_get!(self.next_token());
+    fn parse_term(&mut self) -> Option<Result<Term>> {
+        let tok = self.next_token()?;
         match tok {
-        
             Tok::Atom(atom) => self.term_from_atom(atom),
-            Tok::Variable(var) => { 
+            Tok::Variable(var) => {
                 // Since parse_term needs to get the next token after the term,
                 // we need to advance the token iterator here
-                try_do!(self.next_token());
-                OptRes::from(Some(Ok(
-                        Term::Atomic(AtomicTerm::Variable(var)))))
+                self.next_token()?;
+                Some(Ok(Term::Atomic(AtomicTerm::Variable(var))))
             },
-            _ => OptRes::Bad(Error::Parser(
-                    format!("Unexpected token at the start of a term: {:?}", tok)))
+            _ => Self::err(
+                    format!("Unexpected token at the start of a term: {:?}",
+                            tok))
         }
     }
 
     // Parse the body of a rule - a list of terms forming a conjunction
     // Assumes there will be at least one term.
-    fn parse_term_list(&mut self) -> OptRes<Vec<Term>> {
+    fn parse_term_list(&mut self) -> Option<Result<Vec<Term>>> {
         let mut terms = Vec::new();
         let next_term = try_get!(self.parse_term());
         terms.push(next_term);
@@ -86,54 +92,55 @@ impl<I: Iterator<Item = Result<Tok>>> Parser<I> {
             let next_term = try_get!(self.parse_term());
             terms.push(next_term);
         }
-        OptRes::Good(terms)
+        Some(Ok(terms))
     }
 
-    fn parse_atomic_term_list(&mut self) -> OptRes<Vec<AtomicTerm>> {
+    fn parse_atomic_term_list(&mut self) -> Option<Result<Vec<AtomicTerm>>> {
         let list = try_get!(self.parse_term_list());
         let mut atomic_terms = Vec::new();
         for term in list {
             match term {
                 Term::Atomic(at) => atomic_terms.push(at),
-                Term::Compound(_) => { return OptRes::Bad(
-                    self.err("Syntax Error: nested compound term.")); }
+                Term::Compound(_) => {
+                    return Self::err(
+                        "Syntax Error: nested compound term.".to_string());
+                }
             }
         }
-        OptRes::Good(atomic_terms)
+        Some(Ok(atomic_terms))
     }
 
-    fn err(&self, msg: &str) -> Error {
-        Error::Parser(msg.to_string())
-    }
-
-    fn next_optres(&mut self) -> OptRes<Line> {
-        let first_term = try_get!(self.parse_term());
-        match self.current {
-            Some(Tok::Dot) => OptRes::Good(
-                Line::Rule(Rule { head: first_term, body: vec!() })),
-            Some(Tok::Query) => OptRes::Good(
-                Line::Query(first_term)),
-            Some(Tok::Means) => {
-                        
-                let term_list = try_get!(self.parse_term_list());
-                OptRes::Good(
-                    Line::Rule(Rule { head: first_term, body: term_list }))
-            },
-            Some(_) => OptRes::Bad(Error::Parser(format!(
-                    "Unexpected token following a term. Token: {:?}", self.current))),
-            None => OptRes::Bad(Error::Parser(format!(
-                    "Term found with no token following it: {:?}", first_term)))
-        }
+    fn err<T>(msg: String) -> Option<Result<T>> {
+        Some(Err(Error::Parser(msg)))
     }
 }
 
-impl<I: Iterator<Item = Result<Tok>>> Iterator for Parser<I> {
+impl<I: Iterator<Item = Tok>> Iterator for Parser<I> {
     type Item = Result<Line>;
 
     fn next(&mut self) -> Option<Result<Line>> {
         // First, parse a term. Then, by examining the next token
         // we know what kind of line we're looking at.
-        self.next_optres().into()
+        let first_term = try_get!(self.parse_term());
+        Some(Ok(match self.current {
+            Some(Tok::Dot) => Line::Rule(Rule {
+                head: first_term,
+                body: vec!()
+            }),
+            Some(Tok::Query) => Line::Query(first_term),
+            Some(Tok::Means) => {
+                let term_list = try_get!(self.parse_term_list());
+                Line::Rule(Rule { head: first_term, body: term_list })
+            },
+            Some(_) =>
+                return Self::err(format!(
+                    "Unexpected token following a term. Token: {:?}",
+                    self.current)),
+            None =>
+                return Self::err(format!(
+                    "Term found with no token following it: {:?}",
+                    first_term))
+        }))
     }
 }
 

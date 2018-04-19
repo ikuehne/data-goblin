@@ -1,9 +1,6 @@
 #![feature(io)]
 #![feature(option_filter)]
 
-#[macro_use]
-pub mod optres;
-
 pub mod ast;
 pub mod error;
 pub mod eval;
@@ -16,22 +13,21 @@ use std::io;
 use std::io::stdout;
 use std::io::Read;
 use std::io::Write;
+use std::fmt::Display;
+
+fn abort<T: Display>(e: T) -> ! {
+    println!("Error: {}", e);
+    std::process::exit(1)
+}
 
 fn main() {
     let stdin = io::BufReader::new(io::stdin());
-    let chars = stdin.chars().map(|r| r.unwrap_or_else(|e| {
-        println!("Stream error: {}.", e);
-        std::process::exit(1)
-    }));
+    let chars = stdin.chars().map(|r| r.unwrap_or_else(|e| abort(e)));
 
     let lexer = lexer::Lexer::new(chars);
-    let toks = lexer.map(|r|
-                         r.unwrap_or_else(|err| {
-                             println!("Lexer error: {}.", err);
-                             std::process::exit(1)
-                         }));
+    let toks = lexer.map(|r| r.unwrap_or_else(|e| abort(e)));
 
-    let parser = parser::Parser::new(toks.map(Ok));
+    let parser = parser::Parser::new(toks);
     let lines = parser.map(|l| l.unwrap_or_else(|err| {
         println!("{}.", err);
         std::process::exit(1)
