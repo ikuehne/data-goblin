@@ -153,7 +153,7 @@ mod tests {
 
     fn parse_test(x: Vec<Tok>) -> Option<Vec<Line>> {
         let tokenstream : vec::IntoIter<Tok> = x.into_iter();
-        let parser = Parser::new(tokenstream.map(Ok));
+        let parser = Parser::new(tokenstream);
         parser.map(|opt| match opt {
                 Ok(res) => Some(res),
                 _ => None
