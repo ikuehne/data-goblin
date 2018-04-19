@@ -9,49 +9,57 @@ use std::slice;
 // I think it's best to first write a simple storage engine so we can see what
 // kind of interface works.
 
-pub type Tuple<'a> = Vec<&'a str>;
+pub type Tuple = Vec<String>;
 
 #[derive(Clone, Debug)]
-pub struct Table<'a> {
-    name: &'a str,
-    rows: Vec<Tuple<'a>>
+pub struct Table {
+    rows: Vec<Tuple>
 }
 
-impl<'a> Table<'a> {
-    pub fn new(name: &'a str) -> Self {
+impl Table {
+    pub fn new() -> Self {
         Table {
-            name,
             rows: Vec::new()
         }
     }
+
+    pub fn assert(&mut self, fact: Tuple) {
+        self.rows.push(fact)
+    }
 }
 
-impl<'a> IntoIterator for &'a mut Table<'a> {
-    type Item = &'a mut Tuple<'a>;
-    type IntoIter = slice::IterMut<'a, Tuple<'a>>;
+pub type TableScan<'i> = slice::Iter<'i, Tuple>;
 
-    fn into_iter(self) -> slice::IterMut<'a, Tuple<'a>> {
-        (&mut self.rows).into_iter()
+impl<'i> IntoIterator for &'i Table {
+    type Item = &'i Tuple;
+    type IntoIter = TableScan<'i>;
+
+    fn into_iter(self) -> TableScan<'i> {
+        (&self.rows).into_iter()
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct StorageEngine<'a> {
-    tables: HashMap<&'a str, Table<'a>>
+pub struct StorageEngine {
+    tables: HashMap<String, Table>
 }
 
-impl<'a> StorageEngine<'a> {
+impl StorageEngine {
     pub fn new() -> Self {
         StorageEngine {
             tables: HashMap::new()
         }
     }
 
-    pub fn get_table(&mut self, name: &'a str) -> &Table {
-        self.get_table_mut(name)
+    pub fn get_table<'i>(&'i self, name: &str) -> Option<&'i Table> {
+        self.tables.get(name)
     }
 
-    pub fn get_table_mut(&mut self, name: &'a str) -> &mut Table<'a> {
-        self.tables.entry(name).or_insert(Table::new(name))
+    pub fn get_table_mut(&mut self, name: &str) -> Option<&mut Table> {
+        self.tables.get_mut(name)
+    }
+
+    pub fn get_or_create_table(&mut self, name: String) -> &mut Table {
+        self.tables.entry(name).or_insert(Table::new())
     }
 }
