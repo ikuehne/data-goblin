@@ -9,6 +9,8 @@ pub mod parser;
 pub mod tok;
 pub mod storage;
 
+use error::*;
+
 use std::io;
 use std::io::stdout;
 use std::io::Read;
@@ -18,6 +20,19 @@ use std::fmt::Display;
 fn abort<T: Display>(e: T) -> ! {
     eprintln!("Error: {}", e);
     std::process::exit(1)
+}
+
+fn handle_line(evaluator: &mut eval::Evaluator, line: ast::Line) -> Result<()> {
+    Ok(match line {
+        ast::Line::Query(t) => {
+            if evaluator.query(t)?.next().is_some() {
+                println!("True.")
+            } else {
+                println!("False.")
+            }
+        },
+        ast::Line::Rule(r) => evaluator.assert(r)?
+    })
 }
 
 fn main() {
@@ -36,16 +51,9 @@ fn main() {
     let engine = storage::StorageEngine::new();
     let mut evaluator = eval::Evaluator::new(engine);
     for line in lines {
-        match line {
-            ast::Line::Query(t) => {
-                if evaluator.query(t).next().is_some() {
-                    println!("True.")
-                } else {
-                    println!("False.")
-                }
-            },
-            ast::Line::Rule(r) => evaluator.assert(r)
-        }
+        handle_line(&mut evaluator, line).unwrap_or_else(|e| {
+            eprintln!("Error: {}", e);
+        });
         print!("{}", prompt);
         stdout().flush().unwrap();
     }

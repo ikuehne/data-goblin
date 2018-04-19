@@ -3,7 +3,9 @@
 /// Intended mostly as a skeleton while we work out architecture.
 
 use ast;
+use error::*;
 use storage;
+use storage::Relation::*;
 
 pub struct Evaluator {
     engine: storage::StorageEngine
@@ -41,34 +43,52 @@ impl Evaluator {
         Evaluator { engine }
     }
 
-    fn to_atom(t: ast::AtomicTerm) -> String {
+    fn to_atom(t: ast::AtomicTerm) -> Result<String> {
         match t {
-            ast::AtomicTerm::Atom(s) => s,
-            _ => panic!("Can't handle variables yet!")
+            ast::AtomicTerm::Atom(s) => Ok(s),
+            ast::AtomicTerm::Variable(v) =>
+                Err(Error::MalformedLine(format!("unexpected variable: {}", v)))
         }
     }
 
-    fn deconstruct_term(t: ast::Term) -> (String, Vec<String>) {
+    fn deconstruct_term(t: ast::Term) -> Result<(String, Vec<String>)> {
         match t {
-            ast::Term::Atomic(a) => (Self::to_atom(a), Vec::new()),
-            ast::Term::Compound(cterm) =>
-                (cterm.relation,
-                 cterm.params.into_iter().map(Self::to_atom).collect())
+            ast::Term::Atomic(a) => Ok((Self::to_atom(a)?, Vec::new())),
+            ast::Term::Compound(cterm) => {
+                let mut rest = Vec::new();
+                for param in cterm.params.into_iter().map(Self::to_atom) {
+                    rest.push(param?);
+                }
+                Ok((cterm.relation, rest))
+            }
         }
     }
 
-    pub fn query<'i>(&'i self, query: ast::Term) -> QueryResult<'i> {
-        let (head, rest) = Self::deconstruct_term(query);
+    pub fn query<'i>(&'i self, query: ast::Term) -> Result<QueryResult<'i>> {
+        let (head, rest) = Self::deconstruct_term(query)?;
 
-        let table = self.engine.get_table(&head);
-        table.map(|t| QueryResult::TableFound {
-            query: rest,
-            scan: t.into_iter()
-        }).unwrap_or(QueryResult::NoTableFound)
+        self.engine.get_table(&head).map(|r| match r {
+            Extension(table) => Ok(QueryResult::TableFound {
+                    query: rest,
+                    scan: table.into_iter()
+                }),
+            Intension(_) => Err(Error::NotExtensional(head.clone()))
+        }).unwrap_or(Ok(QueryResult::NoTableFound))
     }
 
-    pub fn assert(&mut self, fact: ast::Rule) {
-        let (head, rest) = Self::deconstruct_term(fact.head);
-        self.engine.get_or_create_table(head).assert(rest)
+    pub fn simple_assert(&mut self, fact: ast::Term) -> Result<()> {
+        let (head, rest) = Self::deconstruct_term(fact)?;
+        match self.engine.get_or_create_table(head.clone()) {
+            Extension(t) => Ok(t.assert(rest)),
+            Intension(_) => Err(Error::NotExtensional(head))
+        }
+    }
+
+    pub fn assert(&mut self, fact: ast::Rule) -> Result<()> {
+        if fact.body.len() == 0 {
+            self.simple_assert(fact.head)
+        } else {
+            Ok(())
+        }
     }
 }

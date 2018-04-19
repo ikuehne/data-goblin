@@ -1,5 +1,7 @@
 /// Simple in-memory storage engine for Datalog.
 
+use ast;
+
 use std::collections::HashMap;
 use std::iter::IntoIterator;
 use std::slice;
@@ -14,6 +16,16 @@ pub type Tuple = Vec<String>;
 #[derive(Clone, Debug)]
 pub struct Table {
     rows: Vec<Tuple>
+}
+
+pub struct View {
+    formals: Vec<String>,
+    definition: Vec<ast::Term>
+}
+
+pub enum Relation {
+    Extension(Table),
+    Intension(View)
 }
 
 impl Table {
@@ -39,9 +51,8 @@ impl<'i> IntoIterator for &'i Table {
     }
 }
 
-#[derive(Clone, Debug)]
 pub struct StorageEngine {
-    tables: HashMap<String, Table>
+    tables: HashMap<String, Relation>
 }
 
 impl StorageEngine {
@@ -51,15 +62,15 @@ impl StorageEngine {
         }
     }
 
-    pub fn get_table(&self, name: &str) -> Option<&Table> {
+    pub fn get_table(&self, name: &str) -> Option<&Relation> {
         self.tables.get(name)
     }
 
-    pub fn get_table_mut(&mut self, name: &str) -> Option<&mut Table> {
+    pub fn get_table_mut(&mut self, name: &str) -> Option<&mut Relation> {
         self.tables.get_mut(name)
     }
 
-    pub fn get_or_create_table(&mut self, name: String) -> &mut Table {
-        self.tables.entry(name).or_insert(Table::new())
+    pub fn get_or_create_table(&mut self, name: String) -> &mut Relation {
+        self.tables.entry(name).or_insert(Relation::Extension(Table::new()))
     }
 }
