@@ -51,7 +51,7 @@ impl StorageEngine {
         }
     }
 
-    pub fn get_table<'i>(&'i self, name: &str) -> Option<&'i Table> {
+    pub fn get_table(&self, name: &str) -> Option<&Table> {
         self.tables.get(name)
     }
 

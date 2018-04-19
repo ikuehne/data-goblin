@@ -9,22 +9,29 @@ pub struct Evaluator {
     engine: storage::StorageEngine
 }
 
-pub struct QueryResult<'i> {
-    query: Vec<String>,
-    scan: storage::TableScan<'i>
+pub enum QueryResult<'i> {
+    TableFound {
+        query: Vec<String>,
+        scan: storage::TableScan<'i>
+    },
+    NoTableFound
 }
 
 impl<'i> Iterator for QueryResult<'i> {
     type Item = &'i storage::Tuple;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.scan.next() {
-            None => None,
-            Some(t) => if *t == self.query {
-                Some(t)
-            } else {
-                self.next()
-            }
+        match self {
+            QueryResult::TableFound { query, scan } =>
+                match scan.next() {
+                    None => None,
+                    Some(t) => if *t == *query {
+                        Some(t)
+                    } else {
+                        self.next()
+                    }
+                }
+            QueryResult::NoTableFound => None
         }
     }
 }
@@ -50,14 +57,14 @@ impl Evaluator {
         }
     }
 
-    pub fn query<'i>(&'i self, query: ast::Term) -> Option<QueryResult<'i>> {
+    pub fn query<'i>(&'i self, query: ast::Term) -> QueryResult<'i> {
         let (head, rest) = Self::deconstruct_term(query);
 
         let table = self.engine.get_table(&head);
-        table.map(|t| QueryResult {
+        table.map(|t| QueryResult::TableFound {
             query: rest,
             scan: t.into_iter()
-        })
+        }).unwrap_or(QueryResult::NoTableFound)
     }
 
     pub fn assert(&mut self, fact: ast::Rule) {

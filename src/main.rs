@@ -38,12 +38,7 @@ fn main() {
     for line in lines {
         match line {
             ast::Line::Query(t) => {
-                let result =
-                    evaluator.query(t).map(|i| {
-                        let res: Vec<&storage::Tuple> = i.collect();
-                        res.get(0).is_some()
-                    }).unwrap_or(false);
-                if result {
+                if evaluator.query(t).next().is_some() {
                     println!("True.")
                 } else {
                     println!("False.")
