@@ -25,14 +25,7 @@ impl<'i> Iterator for QueryResult<'i> {
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             QueryResult::TableFound { query, scan } =>
-                match scan.next() {
-                    None => None,
-                    Some(t) => if *t == *query {
-                        Some(t)
-                    } else {
-                        self.next()
-                    }
-                }
+                scan.filter(|t| **t == *query).next(),
             QueryResult::NoTableFound => None
         }
     }
