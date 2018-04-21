@@ -4,6 +4,7 @@
 
 use ast;
 use error::*;
+use std::collections::HashMap;
 use storage;
 use storage::Relation::*;
 
@@ -17,6 +18,10 @@ pub struct QueryParams {
 
 impl QueryParams {
     fn match_tuple(&mut self, t: &storage::Tuple) -> bool {
+
+        // Ensure each variable is bound to exactly one atom
+        let mut variable_bindings: HashMap<&str, &str> = HashMap::new();
+
         for i in 0..self.params.len() {
             match self.params[i] {
                 ast::AtomicTerm::Atom(ref s) => {
@@ -24,7 +29,13 @@ impl QueryParams {
                         return false;
                     }
                 },
-                _ => ()
+                ast::AtomicTerm::Variable(ref s) => {
+                    let binding = variable_bindings.entry(s.as_str())
+                        .or_insert(&t[i]);
+                    if *binding != t[i] {
+                        return false;
+                    }
+                }
             }
         }
         true
