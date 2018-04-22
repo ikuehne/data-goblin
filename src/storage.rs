@@ -1,4 +1,4 @@
-/// Simple in-memory storage engine for Datalog.
+/// Simple JSON-based. storage engine for Datalog.
 
 use ast;
 use error::*;
