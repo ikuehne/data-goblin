@@ -89,7 +89,7 @@ impl Evaluator {
     pub fn query(&self, query: ast::Term) -> Result<QueryResult> {
         let (head, rest) = Self::deconstruct_term(query)?;
 
-        self.engine.get_table(head.as_str()).map(|r| match r {
+        self.engine.get_relation(head.as_str()).map(|r| match r {
             Extension(ref table) => Ok(QueryResult::TableFound {
                     query: rest,
                     scan: table.into_iter()
@@ -101,7 +101,7 @@ impl Evaluator {
     pub fn simple_assert(&mut self, fact: ast::Term) -> Result<()> {
         let (head, rest) = Self::deconstruct_term(fact)?;
         let tuple = Self::create_tuple(rest)?;
-        match *self.engine.get_or_create_table(head.clone()) {
+        match *self.engine.get_or_create_relation(head.clone()) {
             Extension(ref mut t) => Ok(t.assert(tuple)),
             Intension(_) => Err(Error::NotExtensional(head))
         }

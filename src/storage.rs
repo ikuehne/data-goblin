@@ -79,7 +79,7 @@ impl<'i> IntoIterator for &'i Table {
 /// relations, and ensure that modifications to relations are durable.
 pub struct StorageEngine {
     data_dir: String,
-    tables: HashMap<String, Relation>
+    relations: HashMap<String, Relation>
 }
 
 /// A mutable view on a `Relation`.
@@ -122,7 +122,7 @@ impl StorageEngine {
     /// not exist, it will be created; if it does, its contents will be read
     /// into the new `StorageEngine`.
     pub fn new(data_dir: String) -> Result<Self> {
-        let mut tables = HashMap::new();
+        let mut relations = HashMap::new();
 
         match fs::read_dir(data_dir.clone()) {
             Err(e) =>
@@ -131,7 +131,7 @@ impl StorageEngine {
                         fs::create_dir(data_dir.as_str()).map_err(err)?;
                         Ok(StorageEngine {
                             data_dir,
-                            tables
+                            relations
                         })
                     },
                     _ => Err(err(e))
@@ -147,11 +147,11 @@ impl StorageEngine {
                     let name = entry.file_name().into_string().map_err(|e|
                         Error::BadFilename(e)
                     )?;
-                    tables.insert(name, table);
+                    relations.insert(name, table);
                 }
                 Ok(StorageEngine {
                     data_dir,
-                    tables
+                    relations
                 })
             }
         }
@@ -166,16 +166,16 @@ impl StorageEngine {
     /// Get an immutable view on the named relation.
     /// 
     /// Returns `None` if it is not in the database.
-    pub fn get_table(&self, name: &str) -> Option<&Relation> {
-        self.tables.get(name)
+    pub fn get_relation(&self, name: &str) -> Option<&Relation> {
+        self.relations.get(name)
     }
 
     /// Get a mutable view on the named relation.
     /// 
     /// Returns `None` if it is not in the database. See also `RelViewMut`.
-    pub fn get_table_mut(&mut self, name: &str) -> Option<RelViewMut> {
+    pub fn get_relation_mut(&mut self, name: &str) -> Option<RelViewMut> {
         let path = self.path_of_table_name(name);
-        self.tables.get_mut(name).map(|t| {
+        self.relations.get_mut(name).map(|t| {
             RelViewMut(t, path)
         })
     }
@@ -184,9 +184,9 @@ impl StorageEngine {
     /// 
     /// Must take ownership of the table name, because it needs to be stored in
     /// the database if it is not already there. See also `RelViewMut`.
-    pub fn get_or_create_table(&mut self, name: String) -> RelViewMut {
+    pub fn get_or_create_relation(&mut self, name: String) -> RelViewMut {
         let contents = Relation::Extension(Table::new());
         let path = self.path_of_table_name(name.as_str());
-        RelViewMut(self.tables.entry(name).or_insert(contents), path)
+        RelViewMut(self.relations.entry(name).or_insert(contents), path)
     }
 }
