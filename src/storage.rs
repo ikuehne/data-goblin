@@ -190,3 +190,41 @@ impl StorageEngine {
         RelViewMut(self.relations.entry(name).or_insert(contents), path)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use storage::*;
+
+    fn test_table(v: &Vec<Vec<&str>>) -> Table {
+        let mut t = Table::new();
+        for tuple in v {
+            t.assert(tuple.into_iter().map(|r| r.to_string()).collect());
+        }
+        t
+    }
+
+    fn table_as_vec(t: &Table) -> Vec<&Tuple> {
+        t.into_iter().collect()
+    }
+
+    #[test]
+    fn empty_table() {
+        let t = Table::new();
+        let expected: Vec<&Tuple> = vec!();
+        assert_eq!(table_as_vec(&t), expected);
+    }
+
+    #[test]
+    fn table_scan() {
+        let expected_contents = vec!(vec!("a", "b", "c"),
+                                     vec!("d", "e", "f"));
+        let t = test_table(&expected_contents);
+        let mut expected: Vec<&Vec<&str>> = Vec::new();
+        
+        for tuple in &expected_contents {
+            expected.push(tuple)
+        }
+
+        assert_eq!(table_as_vec(&t), expected);
+    }
+}
