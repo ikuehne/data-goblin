@@ -1,3 +1,4 @@
+use std;
 use std::error;
 use std::fmt;
 use std::result;
@@ -13,7 +14,9 @@ pub enum Error {
     /// extensional.
     NotExtensional(String),
     /// A query or assertion was malformed for the given reason.
-    MalformedLine(String)
+    MalformedLine(String),
+    StorageError(Box<std::error::Error>),
+    BadFilename(std::ffi::OsString)
 }
 
 /// Custom result type for data-goblin.
@@ -25,7 +28,9 @@ impl error::Error for Error {
             Error::Lexer(_) => "lexer error",
             Error::Parser(_) => "parser error",
             Error::NotExtensional(_) | Error::MalformedLine(_) =>
-                "evaluation error"
+                "evaluation error",
+            Error::StorageError(_) => "storage error",
+            Error::BadFilename(_) => "bad filename for table file"
         }
     }
 
@@ -34,7 +39,9 @@ impl error::Error for Error {
             Error::Lexer(_) => None,
             Error::Parser(_) => None,
             Error::NotExtensional(_) => None,
-            Error::MalformedLine(_) => None
+            Error::MalformedLine(_) => None,
+            Error::StorageError(e) => e.cause(),
+            Error::BadFilename(_) => None
         }
     }
 }
@@ -47,7 +54,10 @@ impl fmt::Display for Error {
             Error::NotExtensional(s) =>
                 write!(f, "not an extensional relation: {}", s),
             Error::MalformedLine(s) =>
-                write!(f, "malformed query/assertion: {}", s)
+                write!(f, "malformed query/assertion: {}", s),
+            Error::StorageError(e) => write!(f, "storage error: {}", e),
+            Error::BadFilename(s) =>
+                write!(f, "bad filename for table file: {:?}", s)
         }
     }
 }
