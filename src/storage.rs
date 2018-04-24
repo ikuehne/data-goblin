@@ -17,6 +17,7 @@ use std::iter::IntoIterator;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::slice;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Perhaps we want this to be generic in the future to allow swapping out
 // storage engines, since we're likely to make several storage engines. For now,
@@ -27,16 +28,16 @@ use std::slice;
 pub type Tuple = Vec<String>;
 
 /// A `Table` is an extensional relation in the database.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Table {
-    rows: Vec<Tuple>
+    rows: Vec<Tuple>,
 }
 
 /// A `View` is an intensional relation in the database.
 #[derive(Serialize, Deserialize)]
 pub struct View {
     formals: Vec<String>,
-    definition: Vec<ast::Term>
+    definition: Vec<ast::Term>,
 }
 
 /// A `Relation` is either an extensional or an intensional relation.
@@ -44,6 +45,14 @@ pub struct View {
 pub enum Relation {
     Extension(Table),
     Intension(View)
+}
+
+#[derive(Serialize, Deserialize)]
+struct TaggedRelation {
+    contents: Relation,
+    path: String,
+    #[serde(default, skip)]
+    dirty: AtomicBool
 }
 
 impl Table {
@@ -56,6 +65,36 @@ impl Table {
     /// Add a fact to this relation.
     pub fn assert(&mut self, fact: Tuple) {
         self.rows.push(fact)
+    }
+}
+
+impl TaggedRelation {
+    fn new(path: String, contents: Relation) -> Self {
+        TaggedRelation {
+            path,
+            contents,
+            dirty: AtomicBool::default()
+        }
+    }
+
+    /// Set the "dirty" flag, and return the previous dirty state.
+    fn dirty(&self) -> bool {
+        self.dirty.swap(true, Ordering::SeqCst)
+    }
+
+    /// Unset the "dirty" flag, and return the previous dirty state.
+    fn clean(&self) -> bool {
+        self.dirty.swap(false, Ordering::SeqCst)
+    }
+
+    // On dropping the `RelViewMut`, any changes are written back.
+    fn write_back(&self) {
+        if self.clean() {
+            let out =
+                io::BufWriter::new(fs::File::create(self.path.as_str())
+                                       .unwrap());
+            serde_json::to_writer(out, self).unwrap();
+        }
     }
 }
 
@@ -79,20 +118,18 @@ impl<'i> IntoIterator for &'i Table {
 /// relations, and ensure that modifications to relations are durable.
 pub struct StorageEngine {
     data_dir: String,
-    relations: HashMap<String, Relation>
+    relations: HashMap<String, TaggedRelation>
 }
 
 /// A mutable view on a `Relation`.
 /// 
 /// Ensures that any changes to the `Relation` are written back to disk.
-pub struct RelViewMut<'i>(&'i mut Relation, String);
+pub struct RelViewMut<'i>(&'i mut TaggedRelation);
 
 impl<'i> Drop for RelViewMut<'i> {
     // On dropping the `RelViewMut`, any changes are written back.
     fn drop(&mut self) {
-        let out =
-            io::BufWriter::new(fs::File::create(self.1.as_str()).unwrap());
-        serde_json::to_writer(out, self.0).unwrap();
+        self.0.dirty();
     }
 }
 
@@ -100,13 +137,13 @@ impl<'i> Deref for RelViewMut<'i> {
     type Target = Relation;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.0.contents
     }
 }
 
 impl<'i> DerefMut for RelViewMut<'i> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.0.contents
     }
 }
 
@@ -142,7 +179,7 @@ impl StorageEngine {
                     let fname = entry.path();
                     let reader = fs::File::open(fname).map_err(err)?;
                     let buffered = io::BufReader::new(reader);
-                    let table: Relation =
+                    let table: TaggedRelation =
                         serde_json::from_reader(buffered).map_err(err)?;
                     let name = entry.file_name().into_string().map_err(|e|
                         Error::BadFilename(e)
@@ -167,17 +204,14 @@ impl StorageEngine {
     /// 
     /// Returns `None` if it is not in the database.
     pub fn get_relation(&self, name: &str) -> Option<&Relation> {
-        self.relations.get(name)
+        self.relations.get(name).map(|r| &r.contents)
     }
 
     /// Get a mutable view on the named relation.
     /// 
     /// Returns `None` if it is not in the database. See also `RelViewMut`.
     pub fn get_relation_mut(&mut self, name: &str) -> Option<RelViewMut> {
-        let path = self.path_of_table_name(name);
-        self.relations.get_mut(name).map(|t| {
-            RelViewMut(t, path)
-        })
+        self.relations.get_mut(name).map(RelViewMut)
     }
 
     /// Retrieve the given relation, or create it if it doesn't exist.
@@ -185,9 +219,22 @@ impl StorageEngine {
     /// Must take ownership of the table name, because it needs to be stored in
     /// the database if it is not already there. See also `RelViewMut`.
     pub fn get_or_create_relation(&mut self, name: String) -> RelViewMut {
-        let contents = Relation::Extension(Table::new());
         let path = self.path_of_table_name(name.as_str());
-        RelViewMut(self.relations.entry(name).or_insert(contents), path)
+        let contents = Relation::Extension(Table::new());
+        let relation = TaggedRelation::new(path, contents);
+        RelViewMut(self.relations.entry(name).or_insert(relation))
+    }
+
+    pub fn write_back(&self) {
+        for (_, relation) in &self.relations {
+            (&relation).write_back();
+        }
+    }
+}
+
+impl Drop for StorageEngine {
+    fn drop(&mut self) {
+        self.write_back();
     }
 }
 
