@@ -17,6 +17,7 @@ extern crate serde_json;
 
 use error::*;
 
+use std::collections::HashMap;
 use std::io;
 use std::io::stdout;
 use std::io::Read;
