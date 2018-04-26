@@ -189,6 +189,17 @@ impl StorageEngine {
         let path = self.path_of_table_name(name.as_str());
         RelViewMut(self.relations.entry(name).or_insert(contents), path)
     }
+
+    pub fn create_view(
+            &mut self,
+            name: String,
+            formals: Vec<ast::AtomicTerm>,
+            definition: Vec<ast::Term>) {
+        let view = Relation::Intension(
+            View { formals: formals, definition: definition });
+        let path = self.path_of_table_name(name.as_str());
+        self.relations.insert(name, view);
+    }
 }
 
 #[cfg(test)]

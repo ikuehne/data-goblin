@@ -34,7 +34,9 @@ fn abort<T: Display>(e: T) -> ! {
 fn handle_line(evaluator: &mut eval::Evaluator, line: ast::Line) -> Result<()> {
     Ok(match line {
         ast::Line::Query(t) => {
-            for tuple in evaluator.scan_from_term(t)? {
+            let scan = evaluator.scan_from_term(t)?;
+            //println!("{:?}", scan);
+            for tuple in scan {
                 println!("{:?}", tuple);
             }
         },

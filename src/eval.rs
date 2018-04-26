@@ -13,6 +13,7 @@ pub struct Evaluator {
     engine: storage::StorageEngine
 }
 
+#[derive(Debug)]
 pub struct QueryParams {
     params: Vec<ast::AtomicTerm>
 }
@@ -50,6 +51,7 @@ impl QueryParams {
     }
 }
 
+#[derive(Debug)]
 /// A `FrameScan` is a struct that produces frames.
 pub enum FrameScan<'i> {
     /// A `Binder` takes tuples from a QueryResult and binds them according
@@ -83,8 +85,43 @@ impl<'i> FrameScan<'i> {
 
 }
 
-fn merge_frames<'i>(f1: &'i Frame, f2: &'i Frame) -> Frame {
-    HashMap::new()
+fn merge_frames<'i>(f1: &'i Frame, f2: &'i Frame) -> Option<Frame> {
+
+    //println!("{:?} merging with {:?}", f1, f2);
+    // TODO - don't copy these
+    let mut result = HashMap::new();
+    for (var, binding1) in f1 {
+        match f2.get(var) {
+            Some(binding2) => { 
+                if binding1 != binding2 {
+                    return None;
+                } else {
+                    result.insert(var.clone(), binding1.clone());
+                }
+            }
+            None => {
+                result.insert(var.clone(), binding1.clone());
+            }
+        };
+    }
+
+    for (var, binding2) in f2 {
+        match f1.get(var) {
+            Some(binding1) => { 
+                if binding1 != binding2 {
+                    return None;
+                } else {
+                    result.insert(var.clone(), binding2.clone());
+                }
+            }
+            None => {
+                result.insert(var.clone(), binding2.clone());
+            }
+        };
+    }
+
+    return Some(result);
+   
 }
 
 impl<'i> Iterator for FrameScan<'i> {
@@ -92,28 +129,52 @@ impl<'i> Iterator for FrameScan<'i> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            FrameScan::Binder { query, scan } => scan.next()
-                .and_then(|t| query.match_tuple(t)),
-            FrameScan::JoinScan { left, right, ref mut current_left } => match right.next() {
-                None => {
-                    right.reset();
-                    let r = right.next();
-                    let result = r.and_then(|right|
+            FrameScan::Binder { query, scan } => loop {
+                let t = scan.next()?;
+                match query.match_tuple(&t) {
+                    None => (),
+                    Some(frame) => { return Some(frame); }
+                };
+            },
+            FrameScan::JoinScan { left, right, ref mut current_left } => loop {
+                match right.next() {
+                    None => {
+                        //println!("resetting right iterator");
+                        right.reset();
+                        if let Some(r) = right.next() {
+                            
                         match left.next() {
                             None => {
+                                //println!("left iterator is over");
                                 *current_left = None;
-                                None
+                                return None;
                             },
                             Some(l) => {
                                 *current_left = Some(l.clone());
-                                Some(merge_frames(&l, &right))
+                                if let Some(result) = merge_frames(&l, &r) {
+                                    return Some(result);
+                                };
                             }
-                        });
-                    return result;
+                        }
+                        } else {
+                            //println!("right iterator returns none after reset");
+                            return None;
+                        }
                     },
-                Some(r) => match current_left {
-                    Some(l) => Some(merge_frames(&l, &r)),
-                    None => None
+                    Some(r) => {
+                        if let Some(l) = current_left {
+                            if let Some(result) = merge_frames(l, &r) {
+                                return Some(result);
+                            }
+                        } else {
+                            // Left iterator hasn't been advanced
+                            let l = left.next()?.clone();
+                            *current_left = Some(l.clone());
+                            if let Some(result) = merge_frames(&l, &r) {
+                                return Some(result);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -121,8 +182,10 @@ impl<'i> Iterator for FrameScan<'i> {
 
 }
 
+#[derive(Debug)]
 pub enum RelationScan<'i> {
     Extensional {
+        table: &'i storage::Table,
         scan: storage::TableScan<'i>
     },
     Intensional {
@@ -137,8 +200,8 @@ impl<'i> RelationScan<'i> {
     fn reset(&mut self) {
 
         match self {
-            RelationScan::Extensional { scan } => {
-                scan.into_iter();
+            RelationScan::Extensional { table, ref mut scan } => {
+                *scan = table.into_iter();
             },
             RelationScan::Intensional { formals, scan } => {
                 scan.reset();
@@ -148,20 +211,39 @@ impl<'i> RelationScan<'i> {
     }
 
     fn tuple_from_frame(formals: Vec<ast::AtomicTerm>, frame: Option<Frame>)
-        -> Option<&'i storage::Tuple> {
+        -> Option<storage::Tuple> {
         // TODO
-        None
+        if let Some(frame) = frame {
+            let mut result = Vec::new();
+            for f in formals {
+                match f {
+                    ast::AtomicTerm::Variable(v) => {
+                        match frame.get(&v) {
+                            Some(binding) => result.push(binding.clone()),
+                            None => return None
+                        };
+                    }
+                    ast::AtomicTerm::Atom(a) => {
+                        result.push(a.clone());
+                    }
+                }
+            }
+            Some(result)
+        }
+        else {
+            None
+        }
     }
 
 }
 
 impl<'i> Iterator for RelationScan<'i> {
-    type Item = &'i storage::Tuple;
+    type Item = storage::Tuple;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            RelationScan::Extensional { scan } =>
-                scan.next(),
+            RelationScan::Extensional { table, scan } =>
+                scan.next().map(|t| t.clone()),
             RelationScan::Intensional { formals, scan } =>
                 Self::tuple_from_frame(formals.clone(), scan.next()),
             RelationScan::NoTableFound => None
@@ -241,6 +323,7 @@ impl<'i> Evaluator {
         let relation = self.engine.get_relation(head.as_str());
         let scan = match relation {
             Some(Extension(ref table)) => Some(RelationScan::Extensional {
+                    table: table,
                     scan: table.into_iter()
                 }),
             Some(Intension(view)) =>
@@ -274,11 +357,16 @@ impl<'i> Evaluator {
         }
     }
 
+    pub fn create_view(&mut self, rule: ast::Rule) -> Result<()> {
+        let (name, definition) = Self::deconstruct_term(rule.head)?;
+        Ok(self.engine.create_view(name, definition.params, rule.body))
+    }
+
     pub fn assert(&mut self, fact: ast::Rule) -> Result<()> {
         if fact.body.len() == 0 {
             self.simple_assert(fact.head)
         } else {
-            Ok(())
+            self.create_view(fact)
         }
     }
 }
