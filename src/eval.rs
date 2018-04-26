@@ -5,6 +5,7 @@
 use ast;
 use error::*;
 use std::collections::HashMap;
+use std::collections::LinkedList;
 use storage;
 use storage::Relation::*;
 
@@ -16,16 +17,18 @@ pub struct QueryParams {
     params: Vec<ast::AtomicTerm>
 }
 
+pub type Frame = HashMap<String, String>;
+
 impl QueryParams {
     
     /* Check if the given tuple can match with the query parameters, and
      * return a map of variable bindings.
      */
     fn match_tuple<'a>(&'a mut self, t: &'a storage::Tuple)
-        -> Option<HashMap<&'a str, &'a str>> {
+        -> Option<Frame> {
 
         // Ensure each variable is bound to exactly one atom
-        let mut variable_bindings: HashMap<&str, &str> = HashMap::new();
+        let mut variable_bindings: HashMap<String, String> = HashMap::new();
 
         for i in 0..self.params.len() {
             match self.params[i] {
@@ -35,8 +38,8 @@ impl QueryParams {
                     }
                 },
                 ast::AtomicTerm::Variable(ref s) => {
-                    let binding = variable_bindings.entry(s.as_str())
-                        .or_insert(&t[i]);
+                    let binding = variable_bindings.entry(s.to_string())
+                        .or_insert(t[i].clone());
                     if *binding != t[i] {
                         return None;
                     }
@@ -45,59 +48,128 @@ impl QueryParams {
         }
         return Some(variable_bindings);
     }
+}
 
-    fn tuple_from_frame(&mut self, t: HashMap<&str, &str>) -> &storage::Tuple {
-        // TODO
-        Vec::new()
+/// A `FrameScan` is a struct that produces frames.
+pub enum FrameScan<'i> {
+    /// A `Binder` takes tuples from a QueryResult and binds them according
+    /// to the given query, producing frames.
+    Binder {
+        query: QueryParams,
+        scan: Box<RelationScan<'i>>
+    },
+    /// A `JoinScan` performs a cross join on its two child FrameScans.
+    /// For each Frame on the left, it looks at each Frame on the right, and if
+    /// the variable bindings match, it produces a combined Frame.
+    JoinScan {
+        left: Box<FrameScan<'i>>,
+        right: Box<FrameScan<'i>>,
+        current_left: Option<Frame>
     }
 }
 
-pub enum FrameScan<'i> {
-    TableScan {
-        query: QueryParams,
-        scan: storage::TableScan<'i>
-    },
-    JoinScan {
-        left: FrameScan,
-        right: FrameScan
-    },
-    ProjectScan {
-        query: QueryParams,
-        child: FrameScan
+impl<'i> FrameScan<'i> {
+
+    fn reset(&mut self) {
+        match self {
+            FrameScan::Binder { query, scan } => scan.reset(),
+            FrameScan::JoinScan { left, right, ref mut current_left } => {
+                left.reset();
+                right.reset();
+                *current_left = None;
+            }
+        }
     }
+
+}
+
+fn merge_frames<'i>(f1: &'i Frame, f2: &'i Frame) -> Frame {
+    HashMap::new()
 }
 
 impl<'i> Iterator for FrameScan<'i> {
-    type Item = HashMap<&'i str, &'i str>;
+    type Item = Frame;
 
     fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            FrameScan::Binder { query, scan } => scan.next()
+                .and_then(|t| query.match_tuple(t)),
+            FrameScan::JoinScan { left, right, ref mut current_left } => match right.next() {
+                None => {
+                    right.reset();
+                    let r = right.next();
+                    let result = r.and_then(|right|
+                        match left.next() {
+                            None => {
+                                *current_left = None;
+                                None
+                            },
+                            Some(l) => {
+                                *current_left = Some(l.clone());
+                                Some(merge_frames(&l, &right))
+                            }
+                        });
+                    return result;
+                    },
+                Some(r) => match current_left {
+                    Some(l) => Some(merge_frames(&l, &r)),
+                    None => None
+                }
+            }
+        }
+    }
+
+}
+
+pub enum RelationScan<'i> {
+    Extensional {
+        scan: storage::TableScan<'i>
+    },
+    Intensional {
+        formals: Vec<ast::AtomicTerm>,
+        scan: FrameScan<'i>
+    },
+    NoTableFound
+}
+
+impl<'i> RelationScan<'i> {
+
+    fn reset(&mut self) {
+
+        match self {
+            RelationScan::Extensional { scan } => {
+                scan.into_iter();
+            },
+            RelationScan::Intensional { formals, scan } => {
+                scan.reset();
+            },
+            RelationScan::NoTableFound => ()
+        }
+    }
+
+    fn tuple_from_frame(formals: Vec<ast::AtomicTerm>, frame: Option<Frame>)
+        -> Option<&'i storage::Tuple> {
         // TODO
         None
     }
 
 }
 
-pub enum QueryResult<'i> {
-    RelationFound {
-        query: QueryParams,
-        scan: FrameScan<'i>
-    },
-    NoTableFound
-}
-
-impl<'i> Iterator for QueryResult<'i> {
+impl<'i> Iterator for RelationScan<'i> {
     type Item = &'i storage::Tuple;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            QueryResult::RelationFound { query, scan } =>
-                scan.map(|f| query.tuple_from_frame(f)).next(),
-            QueryResult::NoTableFound => None
+            RelationScan::Extensional { scan } =>
+                scan.next(),
+            RelationScan::Intensional { formals, scan } =>
+                Self::tuple_from_frame(formals.clone(), scan.next()),
+            RelationScan::NoTableFound => None
         }
     }
 }
 
-impl Evaluator {
+impl<'i> Evaluator {
     pub fn new(engine: storage::StorageEngine) -> Self {
         Evaluator { engine }
     }
@@ -132,36 +204,65 @@ impl Evaluator {
         Ok(result)
     }
 
-    fn scan_from_join_list(joins: Vec<ast::Term>) -> FrameScan {
-        // TODO
-    }
+    fn scan_from_join_list(&self, mut joins: LinkedList<ast::Term>) -> Result<FrameScan<'i>> {
 
-    fn scan_from_view(v: storage::View) -> FrameScan {
-        FrameScan::ProjectScan {
-            query: QueryParams { params: v.formals },
-            child: scan_from_join_list(view.definition)
+        let head = joins.pop_front();
+        match head {
+            None => Err(Error::MalformedLine("Empty Join list".to_string())),
+            Some(term) => {
+                let head_term = self.scan_from_term(term)?;
+                if joins.len() == 0 {
+                    Ok(head_term)
+                } else {
+                    let rest_scan = self.scan_from_join_list(joins)?;
+                    Ok(FrameScan::JoinScan {
+                        left: Box::new(head_term),
+                        right: Box::new(rest_scan),
+                        current_left: None
+                    })
+                }
+            }
         }
     }
 
-    fn scan_from_term(term: ast::Term) -> FrameScan {
-
+    fn scan_from_view(&self, v: & storage::View) -> Result<FrameScan<'i>> {
+        let mut joins = LinkedList::new();
+        // TODO - don't clone this whole list
+        for term in &v.definition {
+            joins.push_back(term.clone());
+        }
+        self.scan_from_join_list(joins)
+        
     }
 
-    pub fn query(&self, query: ast::Term) -> Result<QueryResult> {
+    pub fn scan_from_term(&self, query: ast::Term) -> Result<FrameScan<'i>> {
         let (head, rest) = Self::deconstruct_term(query)?;
 
-        self.engine.get_relation(head.as_str()).map(|r| match r {
-            Extension(ref table) => Ok(QueryResult::TableFound {
-                    query: rest,
-                    scan: FrameScan::TableScan {
-                        query: rest, scan: table.into_iter()
-                    }
+        let relation = self.engine.get_relation(head.as_str());
+        let scan = match relation {
+            Some(Extension(ref table)) => Some(RelationScan::Extensional {
+                    scan: table.into_iter()
                 }),
-            Intension(view) => Ok(QueryResult::RelationFound {
+            Some(Intension(view)) =>
+                match self.scan_from_view(&view) {
+                    Err(_) => None,
+                    Ok(s) => Some(RelationScan::Intensional {
+                        formals: view.formals.clone(),
+                        scan: s
+                    })
+                },
+            None => None
+        };
+
+        match scan {
+            None => Err(Error::MalformedLine(format!("No relation found."))),
+            Some(scan) => {
+                Ok(FrameScan::Binder {
                     query: rest,
-                    scan: Self::scan_from_view(view)
+                    scan: Box::new(scan)
                 })
-        }).unwrap_or(Ok(QueryResult::NoTableFound))
+            }
+        }
     }
 
     pub fn simple_assert(&mut self, fact: ast::Term) -> Result<()> {

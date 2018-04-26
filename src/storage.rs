@@ -35,8 +35,8 @@ pub struct Table {
 /// A `View` is an intensional relation in the database.
 #[derive(Serialize, Deserialize)]
 pub struct View {
-    formals: Vec<String>,
-    definition: Vec<ast::Term>
+    pub formals: Vec<ast::AtomicTerm>,
+    pub definition: Vec<ast::Term>
 }
 
 /// A `Relation` is either an extensional or an intensional relation.
