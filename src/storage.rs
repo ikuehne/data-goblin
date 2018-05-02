@@ -46,6 +46,16 @@ pub enum Relation {
     Intension(View)
 }
 
+impl Relation {
+
+    pub fn write_back(&self, path: &str) {
+        let out =
+            io::BufWriter::new(fs::File::create(path).unwrap());
+        serde_json::to_writer(out, self).unwrap();
+    }
+
+}
+
 impl Table {
     fn new() -> Self {
         Table {
@@ -90,9 +100,7 @@ pub struct RelViewMut<'i>(&'i mut Relation, String);
 impl<'i> Drop for RelViewMut<'i> {
     // On dropping the `RelViewMut`, any changes are written back.
     fn drop(&mut self) {
-        let out =
-            io::BufWriter::new(fs::File::create(self.1.as_str()).unwrap());
-        serde_json::to_writer(out, self.0).unwrap();
+        self.0.write_back(self.1.as_str());
     }
 }
 
@@ -198,6 +206,7 @@ impl StorageEngine {
         let view = Relation::Intension(
             View { formals: formals, definition: definition });
         let path = self.path_of_table_name(name.as_str());
+        view.write_back(path.as_str());
         self.relations.insert(name, view);
     }
 }
