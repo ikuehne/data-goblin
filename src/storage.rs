@@ -178,8 +178,7 @@ impl StorageEngine {
         self.relations.get_mut(name).map(|t| {
             RelViewMut(t, path)
         })
-    }
-
+    } 
     /// Retrieve the given relation, or create it if it doesn't exist.
     /// 
     /// Must take ownership of the table name, because it needs to be stored in
@@ -194,6 +193,8 @@ impl StorageEngine {
 #[cfg(test)]
 mod tests {
     use storage::*;
+
+    static TEST_DIR: &'static str = "_test_dir";
 
     fn test_table(v: &Vec<Vec<&str>>) -> Table {
         let mut t = Table::new();
@@ -226,5 +227,28 @@ mod tests {
         }
 
         assert_eq!(table_as_vec(&t), expected);
+    }
+
+    fn clear_test_dir() {
+        if std::fs::read_dir(TEST_DIR).is_ok() {
+            std::fs::remove_dir_all(TEST_DIR).unwrap();
+        }
+    }
+
+    fn test_engine() -> StorageEngine {
+        clear_test_dir();
+        StorageEngine::new(TEST_DIR.to_string()).unwrap()
+    }
+
+    fn cleanup(engine: StorageEngine) {
+        std::mem::drop(engine);
+        clear_test_dir();
+    }
+
+    #[test]
+    fn initially_empty() {
+        let engine = test_engine();
+        assert!(engine.get_relation("test relation").is_none());
+        cleanup(engine);
     }
 }
