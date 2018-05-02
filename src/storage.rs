@@ -35,8 +35,8 @@ pub struct Table {
 /// A `View` is an intensional relation in the database.
 #[derive(Serialize, Deserialize)]
 pub struct View {
-    formals: Vec<String>,
-    definition: Vec<ast::Term>
+    pub formals: Vec<ast::AtomicTerm>,
+    pub definition: Vec<ast::Term>
 }
 
 /// A `Relation` is either an extensional or an intensional relation.
@@ -187,6 +187,17 @@ impl StorageEngine {
         let contents = Relation::Extension(Table::new());
         let path = self.path_of_table_name(name.as_str());
         RelViewMut(self.relations.entry(name).or_insert(contents), path)
+    }
+
+    pub fn create_view(
+            &mut self,
+            name: String,
+            formals: Vec<ast::AtomicTerm>,
+            definition: Vec<ast::Term>) {
+        let view = Relation::Intension(
+            View { formals: formals, definition: definition });
+        let path = self.path_of_table_name(name.as_str());
+        self.relations.insert(name, view);
     }
 }
 

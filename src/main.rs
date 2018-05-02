@@ -17,6 +17,7 @@ extern crate serde_json;
 
 use error::*;
 
+use std::collections::HashMap;
 use std::io;
 use std::io::stdout;
 use std::io::Read;
@@ -33,7 +34,9 @@ fn abort<T: Display>(e: T) -> ! {
 fn handle_line(evaluator: &mut eval::Evaluator, line: ast::Line) -> Result<()> {
     Ok(match line {
         ast::Line::Query(t) => {
-            for tuple in evaluator.query(t)? {
+            let scan = evaluator.scan_from_term(t)?;
+            //println!("{:?}", scan);
+            for tuple in scan {
                 println!("{:?}", tuple);
             }
         },
