@@ -6,6 +6,7 @@ use ast;
 use error::*;
 use std::collections::HashMap;
 use std::collections::LinkedList;
+use std::collections::HashSet;
 use storage;
 use storage::Relation::*;
 
@@ -82,7 +83,6 @@ impl<'i> FrameScan<'i> {
             }
         }
     }
-
 }
 
 fn merge_frames<'i>(f1: &'i Frame, f2: &'i Frame) -> Option<Frame> {
@@ -286,7 +286,8 @@ impl<'i> Evaluator {
         Ok(result)
     }
 
-    fn scan_from_join_list(&self, mut joins: LinkedList<ast::Term>) -> Result<FrameScan<'i>> {
+    fn scan_from_join_list(&self, mut joins: LinkedList<ast::Term>)
+            -> Result<FrameScan<'i>> {
 
         let head = joins.pop_front();
         match head {
@@ -310,7 +311,7 @@ impl<'i> Evaluator {
     fn scan_from_view(&self, v: & storage::View) -> Result<FrameScan<'i>> {
         let mut joins = LinkedList::new();
         // TODO - don't clone this whole list
-        for term in &v.definition {
+        for term in &v.definition[0] {
             joins.push_back(term.clone());
         }
         self.scan_from_join_list(joins)
@@ -351,22 +352,30 @@ impl<'i> Evaluator {
     pub fn simple_assert(&mut self, fact: ast::Term) -> Result<()> {
         let (head, rest) = Self::deconstruct_term(fact)?;
         let tuple = Self::create_tuple(rest)?;
-        match *self.engine.get_or_create_relation(head.clone()) {
+        let empty = storage::Relation::Extension(storage::Table::new());
+        match *self.engine.get_or_create_relation(head.clone(), empty) {
             Extension(ref mut t) => Ok(t.assert(tuple)),
             Intension(_) => Err(Error::NotExtensional(head))
         }
     }
 
-    pub fn create_view(&mut self, rule: ast::Rule) -> Result<()> {
+    pub fn add_rule_to_view(&mut self, rule: ast::Rule) -> Result<()> {
         let (name, definition) = Self::deconstruct_term(rule.head)?;
-        Ok(self.engine.create_view(name, definition.params, rule.body))
+        let relation = storage::Relation::Intension(
+            storage::View { formals: definition.params, definition: Vec::new() }
+        );
+        let mut rel_view = self.engine.get_or_create_relation(name.clone(), relation);
+        match *rel_view {
+            Extension(_) => Err(Error::NotIntensional(name)),
+            Intension(ref mut view) => Ok(view.definition.push(rule.body))
+        }
     }
 
     pub fn assert(&mut self, fact: ast::Rule) -> Result<()> {
         if fact.body.len() == 0 {
             self.simple_assert(fact.head)
         } else {
-            self.create_view(fact)
+            self.add_rule_to_view(fact)
         }
     }
 }

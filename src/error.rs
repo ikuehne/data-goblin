@@ -13,6 +13,9 @@ pub enum Error {
     /// An operation could not be performed because the named relation is not
     /// extensional.
     NotExtensional(String),
+    /// An operation could not be performed because the named relation is not
+    /// intensional.
+    NotIntensional(String),
     /// A query or assertion was malformed for the given reason.
     MalformedLine(String),
     StorageError(Box<std::error::Error>),
@@ -27,8 +30,10 @@ impl error::Error for Error {
         match self {
             Error::Lexer(_) => "lexer error",
             Error::Parser(_) => "parser error",
-            Error::NotExtensional(_) | Error::MalformedLine(_) =>
-                "evaluation error",
+            Error::NotExtensional(_)
+                | Error::MalformedLine(_)
+                | Error::NotIntensional(_)
+                => "evaluation error",
             Error::StorageError(_) => "storage error",
             Error::BadFilename(_) => "bad filename for table file"
         }
@@ -39,6 +44,7 @@ impl error::Error for Error {
             Error::Lexer(_) => None,
             Error::Parser(_) => None,
             Error::NotExtensional(_) => None,
+            Error::NotIntensional(_) => None,
             Error::MalformedLine(_) => None,
             Error::StorageError(e) => e.cause(),
             Error::BadFilename(_) => None
@@ -53,6 +59,8 @@ impl fmt::Display for Error {
             Error::Parser(s) => write!(f, "parser error: {}", s),
             Error::NotExtensional(s) =>
                 write!(f, "not an extensional relation: {}", s),
+            Error::NotIntensional(s) =>
+                write!(f, "not an intensional relation: {}", s),
             Error::MalformedLine(s) =>
                 write!(f, "malformed query/assertion: {}", s),
             Error::StorageError(e) => write!(f, "storage error: {}", e),

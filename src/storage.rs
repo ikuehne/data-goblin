@@ -36,7 +36,7 @@ pub struct Table {
 #[derive(Serialize, Deserialize)]
 pub struct View {
     pub formals: Vec<ast::AtomicTerm>,
-    pub definition: Vec<ast::Term>
+    pub definition: Vec<Vec<ast::Term>>
 }
 
 /// A `Relation` is either an extensional or an intensional relation.
@@ -57,7 +57,7 @@ impl Relation {
 }
 
 impl Table {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Table {
             rows: Vec::new()
         }
@@ -192,12 +192,13 @@ impl StorageEngine {
     /// 
     /// Must take ownership of the table name, because it needs to be stored in
     /// the database if it is not already there. See also `RelViewMut`.
-    pub fn get_or_create_relation(&mut self, name: String) -> RelViewMut {
-        let contents = Relation::Extension(Table::new());
+    pub fn get_or_create_relation(&mut self, name: String, rel: Relation)
+            -> RelViewMut {
         let path = self.path_of_table_name(name.as_str());
-        RelViewMut(self.relations.entry(name).or_insert(contents), path)
+        RelViewMut(self.relations.entry(name).or_insert(rel), path)
     }
 
+    /*
     pub fn create_view(
             &mut self,
             name: String,
@@ -208,7 +209,8 @@ impl StorageEngine {
         let path = self.path_of_table_name(name.as_str());
         view.write_back(path.as_str());
         self.relations.insert(name, view);
-    }
+    }*/
+
 }
 
 #[cfg(test)]
