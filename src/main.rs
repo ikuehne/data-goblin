@@ -1,3 +1,4 @@
+#![feature(custom_attribute)]
 #![feature(io)]
 #![feature(option_filter)]
 #![feature(type_ascription)]
@@ -23,6 +24,11 @@ use std::io::stdout;
 use std::io::Read;
 use std::io::Write;
 use std::fmt::Display;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
+use std::sync::TryLockError::WouldBlock;
+use std::time::Duration;
 
 const DEFAULT_DATA_DIR: &'static str = "./data/";
 
@@ -31,16 +37,30 @@ fn abort<T: Display>(e: T) -> ! {
     std::process::exit(1)
 }
 
-fn handle_line(evaluator: &mut eval::Evaluator, line: ast::Line) -> Result<()> {
+fn handle_line(engine: &RwLock<storage::StorageEngine>, line: ast::Line)
+        -> Result<()> {
     Ok(match line {
         ast::Line::Query(t) => {
-            let scan = evaluator.scan_from_term(t)?;
-            //println!("{:?}", scan);
-            for tuple in scan {
+            for tuple in eval::scan_from_term(&engine.read().unwrap(), t)? {
                 println!("{:?}", tuple);
             }
         },
-        ast::Line::Rule(r) => evaluator.assert(r)?
+        ast::Line::Rule(r) => eval::assert(&mut engine.write().unwrap(), r)?
+    })
+}
+
+fn write_back(engine: Arc<RwLock<storage::StorageEngine>>,
+              done: Arc<AtomicBool>)
+        -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        while !done.load(Ordering::Relaxed) {
+            match engine.try_read() {
+                Ok(guard) => guard.write_back(),
+                Err(WouldBlock) => (),
+                Err(_) => panic!("poisoned engine lock")
+            };
+            std::thread::sleep(Duration::from_millis(250));
+        }
     })
 }
 
@@ -59,12 +79,21 @@ fn main() {
     stdout().flush().unwrap();
     let engine = storage::StorageEngine::new(DEFAULT_DATA_DIR.to_string())
         .unwrap_or_else(|e| abort(e));
-    let mut evaluator = eval::Evaluator::new(engine);
+
+    let locked_engine = Arc::new(RwLock::new(engine));
+    let done = Arc::new(AtomicBool::default());
+
+    let write_back_handle = write_back(locked_engine.clone(), done.clone());
+
     for line in lines {
-        handle_line(&mut evaluator, line).unwrap_or_else(|e| {
+        handle_line(&locked_engine, line).unwrap_or_else(|e| {
             eprintln!("Error: {}", e);
         });
         print!("{}", prompt);
         stdout().flush().unwrap();
     }
+
+    done.store(true, Ordering::Relaxed);
+
+    write_back_handle.join().unwrap();
 }

@@ -10,10 +10,6 @@ use std::collections::HashSet;
 use storage;
 use storage::Relation::*;
 
-pub struct Evaluator {
-    engine: storage::StorageEngine
-}
-
 #[derive(Debug)]
 pub struct QueryParams {
     params: Vec<ast::AtomicTerm>
@@ -212,7 +208,6 @@ impl<'i> RelationScan<'i> {
 
     fn tuple_from_frame(formals: Vec<ast::AtomicTerm>, frame: Option<Frame>)
         -> Option<storage::Tuple> {
-        // TODO
         if let Some(frame) = frame {
             let mut result = Vec::new();
             for f in formals {
@@ -251,131 +246,132 @@ impl<'i> Iterator for RelationScan<'i> {
     }
 }
 
-impl<'i> Evaluator {
-    pub fn new(engine: storage::StorageEngine) -> Self {
-        Evaluator { engine }
+fn to_atom(t: ast::AtomicTerm) -> Result<String> {
+    match t {
+        ast::AtomicTerm::Atom(s) => Ok(s),
+        ast::AtomicTerm::Variable(v) =>
+            Err(Error::MalformedLine(format!("unexpected variable: {}", v)))
     }
+}
 
-    fn to_atom(t: ast::AtomicTerm) -> Result<String> {
-        match t {
-            ast::AtomicTerm::Atom(s) => Ok(s),
-            ast::AtomicTerm::Variable(v) =>
-                Err(Error::MalformedLine(format!("unexpected variable: {}", v)))
-        }
-    }
 
-    fn deconstruct_term(t: ast::Term) -> Result<(String, QueryParams)> {
-        match t {
-            ast::Term::Atomic(a) => Ok((Self::to_atom(a)?,
-                                        QueryParams { params: Vec::new() })),
-            ast::Term::Compound(cterm) => {
-                let mut rest = Vec::new();
-                for param in cterm.params.into_iter() {
-                    rest.push(param);
-                }
-                Ok((cterm.relation, QueryParams { params: rest }))
+fn deconstruct_term(t: ast::Term) -> Result<(String, QueryParams)> {
+    match t {
+        ast::Term::Atomic(a) => Ok((to_atom(a)?,
+                                    QueryParams { params :Vec::new() })),
+        ast::Term::Compound(cterm) => {
+            let mut rest = Vec::new();
+            for param in cterm.params.into_iter() {
+                rest.push(param);
             }
+            Ok((cterm.relation, QueryParams { params: rest }))
         }
     }
+}
 
-    fn create_tuple(p: QueryParams) -> Result<storage::Tuple> {
-        let mut result = Vec::new();
-        for param in p.params {
-            result.push(Self::to_atom(param)?);
-        }
-        Ok(result)
+fn create_tuple(p: QueryParams) -> Result<storage::Tuple> {
+    let mut result = Vec::new();
+    for param in p.params {
+        result.push(to_atom(param)?);
     }
+    Ok(result)
+}
 
-    fn scan_from_join_list(&self, mut joins: LinkedList<ast::Term>)
-            -> Result<FrameScan<'i>> {
+fn scan_from_join_list(engine: &storage::StorageEngine,
+                       mut joins: LinkedList<ast::Term>)
+        -> Result<FrameScan> {
 
-        let head = joins.pop_front();
-        match head {
-            None => Err(Error::MalformedLine("Empty Join list".to_string())),
-            Some(term) => {
-                let head_term = self.scan_from_term(term)?;
-                if joins.len() == 0 {
-                    Ok(head_term)
-                } else {
-                    let rest_scan = self.scan_from_join_list(joins)?;
-                    Ok(FrameScan::JoinScan {
-                        left: Box::new(head_term),
-                        right: Box::new(rest_scan),
-                        current_left: None
-                    })
-                }
-            }
-        }
-    }
-
-    fn scan_from_view(&self, v: & storage::View) -> Result<FrameScan<'i>> {
-        let mut joins = LinkedList::new();
-        // TODO - don't clone this whole list
-        for term in &v.definition[0] {
-            joins.push_back(term.clone());
-        }
-        self.scan_from_join_list(joins)
-        
-    }
-
-    pub fn scan_from_term(&self, query: ast::Term) -> Result<FrameScan<'i>> {
-        let (head, rest) = Self::deconstruct_term(query)?;
-
-        let relation = self.engine.get_relation(head.as_str());
-        let scan = match relation {
-            Some(Extension(ref table)) => Some(RelationScan::Extensional {
-                    table: table,
-                    scan: table.into_iter()
-                }),
-            Some(Intension(view)) =>
-                match self.scan_from_view(&view) {
-                    Err(_) => None,
-                    Ok(s) => Some(RelationScan::Intensional {
-                        formals: view.formals.clone(),
-                        scan: s
-                    })
-                },
-            None => None
-        };
-
-        match scan {
-            None => Err(Error::MalformedLine(format!("No relation found."))),
-            Some(scan) => {
-                Ok(FrameScan::Binder {
-                    query: rest,
-                    scan: Box::new(scan)
+    let head = joins.pop_front();
+    match head {
+        None => Err(Error::MalformedLine("Empty Join list".to_string())),
+        Some(term) => {
+            let head_term = scan_from_term(engine, term)?;
+            if joins.len() == 0 {
+                Ok(head_term)
+            } else {
+                let rest_scan = scan_from_join_list(engine, joins)?;
+                Ok(FrameScan::JoinScan {
+                    left: Box::new(head_term),
+                    right: Box::new(rest_scan),
+                    current_left: None
                 })
             }
         }
     }
+}
 
-    pub fn simple_assert(&mut self, fact: ast::Term) -> Result<()> {
-        let (head, rest) = Self::deconstruct_term(fact)?;
-        let tuple = Self::create_tuple(rest)?;
-        let empty = storage::Relation::Extension(storage::Table::new());
-        match *self.engine.get_or_create_relation(head.clone(), empty) {
-            Extension(ref mut t) => Ok(t.assert(tuple)),
-            Intension(_) => Err(Error::NotExtensional(head))
+fn scan_from_view<'i>(engine: &'i storage::StorageEngine,
+                  v: &storage::View) -> Result<FrameScan<'i>> {
+    let mut joins = LinkedList::new();
+    // TODO - don't clone this whole list
+    for term in &v.definition[0] {
+        joins.push_back(term.clone());
+    }
+    scan_from_join_list(engine, joins)
+    
+}
+
+pub fn scan_from_term(engine: &storage::StorageEngine,
+                      query: ast::Term) -> Result<FrameScan> {
+    let (head, rest) = deconstruct_term(query)?;
+
+    let relation = engine.get_relation(head.as_str());
+    let scan = match relation {
+        Some(Extension(ref table)) => Some(RelationScan::Extensional {
+                table: table,
+                scan: table.into_iter()
+            }),
+        Some(Intension(view)) =>
+            match scan_from_view(engine, &view) {
+                Err(_) => None,
+                Ok(s) => Some(RelationScan::Intensional {
+                    formals: view.formals.clone(),
+                    scan: s
+                })
+            },
+        None => None
+    };
+
+    match scan {
+        None => Err(Error::MalformedLine(format!("No relation found."))),
+        Some(scan) => {
+            Ok(FrameScan::Binder {
+                query: rest,
+                scan: Box::new(scan)
+            })
         }
     }
+}
 
-    pub fn add_rule_to_view(&mut self, rule: ast::Rule) -> Result<()> {
-        let (name, definition) = Self::deconstruct_term(rule.head)?;
-        let relation = storage::Relation::Intension(
-            storage::View { formals: definition.params, definition: Vec::new() }
-        );
-        let mut rel_view = self.engine.get_or_create_relation(name.clone(), relation);
-        match *rel_view {
-            Extension(_) => Err(Error::NotIntensional(name)),
-            Intension(ref mut view) => Ok(view.definition.push(rule.body))
-        }
+pub fn simple_assert(engine: &mut storage::StorageEngine,
+                     fact: ast::Term) -> Result<()> {
+    let (head, rest) = deconstruct_term(fact)?;
+    let tuple = create_tuple(rest)?;
+    let relation = storage::Relation::Extension(storage::Table::new());
+    match *engine.get_or_create_relation(head.clone(), relation) {
+        Extension(ref mut t) => Ok(t.assert(tuple)),
+        Intension(_) => Err(Error::NotExtensional(head))
     }
+}
 
-    pub fn assert(&mut self, fact: ast::Rule) -> Result<()> {
-        if fact.body.len() == 0 {
-            self.simple_assert(fact.head)
-        } else {
-            self.add_rule_to_view(fact)
-        }
+pub fn add_rule_to_view(engine: &mut storage::StorageEngine,
+                        rule: ast::Rule) -> Result<()> {
+    let (name, definition) = deconstruct_term(rule.head)?;
+    let relation = storage::Relation::Intension(
+        storage::View { formals: definition.params, definition: Vec::new() }
+    );
+    let mut rel_view = engine.get_or_create_relation(name.clone(), relation);
+    match *rel_view {
+        Extension(_) => Err(Error::NotIntensional(name)),
+        Intension(ref mut view) => Ok(view.definition.push(rule.body))
+    }
+}
+
+pub fn assert(engine: &mut storage::StorageEngine,
+              fact: ast::Rule) -> Result<()> {
+    if fact.body.len() == 0 {
+        simple_assert(engine, fact.head)
+    } else {
+        add_rule_to_view(engine, fact)
     }
 }
