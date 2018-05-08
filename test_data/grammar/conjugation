@@ -1,1 +1,1 @@
-{"contents":{"Extension":{"rows":[["to_eat","first","eat"],["to_eat","third","eats"],["to_throw","first","throw"],["to_throw","third","throws"]]}},"path":"./data/conjugation"}
+{"contents":{"Extension":{"contents":["to_eat","first","eat","to_eat","third","eats","to_throw","first","throw","to_throw","third","throws","to_lie","first","lied","to_lie","third","laid"],"arity":3}},"path":"./data/conjugation"}

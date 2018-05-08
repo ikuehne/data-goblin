@@ -1,0 +1,24 @@
+verb(to_eat).
+verb(to_throw).
+verb(to_lie).
+
+conjugation(to_eat, first, eat).
+conjugation(to_eat, third, eats).
+
+conjugation(to_throw, first, throw).
+conjugation(to_throw, third, throws).
+conjugation(to_lie, first, lied).
+conjugation(to_lie, third, laid).
+
+case(first, i).
+case(third, she).
+case(third, he).
+
+object(it).
+object(him).
+
+simple_sentence(SUBJECT, VERB, OBJECT) :-
+    case(PERSON, SUBJECT),
+    verb(INFINITIVE),
+    conjugation(INFINITIVE, PERSON, VERB),
+    object(OBJECT).

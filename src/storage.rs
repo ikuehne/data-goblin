@@ -25,12 +25,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // kind of interface works.
 
 /// A `Tuple` is simply an ordered collection of atoms.
-pub type Tuple = Vec<String>;
+pub type Tuple<'a> = &'a [String];
 
 /// A `Table` is an extensional relation in the database.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Table {
-    rows: Vec<Tuple>,
+    contents: Vec<String>,
+    arity: usize
 }
 
 /// A `View` is an intensional relation in the database.
@@ -65,15 +66,24 @@ struct TaggedRelation {
 }
 
 impl Table {
-    pub fn new() -> Self {
+    pub fn new(arity: usize) -> Self {
         Table {
-            rows: Vec::new()
+            contents: Vec::new(),
+            arity
         }
     }
 
     /// Add a fact to this relation.
-    pub fn assert(&mut self, fact: Tuple) {
-        self.rows.push(fact)
+    pub fn assert(&mut self, mut fact: Vec<String>) -> Result<()> {
+        if fact.len() != self.arity {
+            Err(Error::ArityMismatch {
+                expected: self.arity,
+                got: fact.len()
+            })
+        } else {
+            self.contents.append(&mut fact);
+            Ok(())
+        }
     }
 }
 
@@ -109,15 +119,37 @@ impl TaggedRelation {
 
 /// A TableScan is an iterator over all of the tuples in an extensional
 /// relation.
-pub type TableScan<'i> = slice::Iter<'i, Tuple>;
+#[derive(Debug)]
+pub struct TableScan<'a> {
+    table: &'a Table,
+    index: usize
+}
+
+impl<'a> Iterator for TableScan<'a> {
+    type Item = Tuple<'a>;
+
+    fn next(&mut self) -> Option<Tuple<'a>> {
+        if self.index >= self.table.contents.len() {
+            return None;
+        }
+
+        let slice = self.index..self.index + self.table.arity;
+        let result = &self.table.contents[slice];
+        self.index += self.table.arity;
+        Some(result)
+    }
+}
 
 /// Immutable views on tables can be converted to TableScans.
 impl<'i> IntoIterator for &'i Table {
-    type Item = &'i Tuple;
+    type Item = Tuple<'i>;
     type IntoIter = TableScan<'i>;
 
     fn into_iter(self) -> TableScan<'i> {
-        (&self.rows).into_iter()
+        TableScan {
+            table: self,
+            index: 0
+        }
     }
 }
 
@@ -254,22 +286,22 @@ mod tests {
 
     static TEST_DIR: &'static str = "_test_dir";
 
-    fn test_table(v: &Vec<Vec<&str>>) -> Table {
-        let mut t = Table::new();
+    fn test_table(v: &[Vec<&str>]) -> Table {
+        let mut t = Table::new(v[0].len());
         for tuple in v {
             t.assert(tuple.into_iter().map(|r| r.to_string()).collect());
         }
         t
     }
 
-    fn table_as_vec(t: &Table) -> Vec<&Tuple> {
+    fn table_as_vec(t: &Table) -> Vec<Tuple> {
         t.into_iter().collect()
     }
 
     #[test]
     fn empty_table() {
-        let t = Table::new();
-        let expected: Vec<&Tuple> = vec!();
+        let t = Table::new(10);
+        let expected: Vec<Tuple> = vec!();
         assert_eq!(table_as_vec(&t), expected);
     }
 
@@ -278,7 +310,7 @@ mod tests {
         let expected_contents = vec!(vec!("a", "b", "c"),
                                      vec!("d", "e", "f"));
         let t = test_table(&expected_contents);
-        let mut expected: Vec<&Vec<&str>> = Vec::new();
+        let mut expected: Vec<&[&str]> = Vec::new();
         
         for tuple in &expected_contents {
             expected.push(tuple)

@@ -1,1 +1,1 @@
-{"contents":{"Extension":{"rows":[["to_eat"],["to_throw"]]}},"path":"./data/verb"}
+{"contents":{"Extension":{"contents":["to_eat","to_throw","to_lie"],"arity":1}},"path":"./data/verb"}

@@ -19,7 +19,9 @@ pub enum Error {
     /// A query or assertion was malformed for the given reason.
     MalformedLine(String),
     StorageError(Box<std::error::Error>),
-    BadFilename(std::ffi::OsString)
+    BadFilename(std::ffi::OsString),
+    /// The arity of some fact did not match the arity of the table.
+    ArityMismatch{ expected: usize, got: usize }
 }
 
 /// Custom result type for data-goblin.
@@ -35,7 +37,8 @@ impl error::Error for Error {
                 | Error::NotIntensional(_)
                 => "evaluation error",
             Error::StorageError(_) => "storage error",
-            Error::BadFilename(_) => "bad filename for table file"
+            Error::BadFilename(_) => "bad filename for table file",
+            Error::ArityMismatch { expected: _, got: _ } => "arity mismatch"
         }
     }
 
@@ -47,7 +50,8 @@ impl error::Error for Error {
             Error::NotIntensional(_) => None,
             Error::MalformedLine(_) => None,
             Error::StorageError(e) => e.cause(),
-            Error::BadFilename(_) => None
+            Error::BadFilename(_) => None,
+            Error::ArityMismatch { expected: _, got: _ } => None
         }
     }
 }
@@ -65,7 +69,10 @@ impl fmt::Display for Error {
                 write!(f, "malformed query/assertion: {}", s),
             Error::StorageError(e) => write!(f, "storage error: {}", e),
             Error::BadFilename(s) =>
-                write!(f, "bad filename for table file: {:?}", s)
+                write!(f, "bad filename for table file: {:?}", s),
+            Error::ArityMismatch { expected, got } =>
+                write!(f, "arity mismatch: expected arity {} but got {}",
+                          expected, got)
         }
     }
 }

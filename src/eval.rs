@@ -17,12 +17,14 @@ pub struct QueryParams {
 
 pub type Frame = HashMap<String, String>;
 
+pub type OwnedTuple = Vec<String>;
+
 impl QueryParams {
     
     /* Check if the given tuple can match with the query parameters, and
      * return a map of variable bindings.
      */
-    fn match_tuple<'a>(&'a mut self, t: &'a storage::Tuple)
+    fn match_tuple<'a>(&'a mut self, t: storage::Tuple<'a>)
         -> Option<Frame> {
 
         // Ensure each variable is bound to exactly one atom
@@ -207,7 +209,7 @@ impl<'i> RelationScan<'i> {
     }
 
     fn tuple_from_frame(formals: Vec<ast::AtomicTerm>, frame: Option<Frame>)
-        -> Option<storage::Tuple> {
+        -> Option<OwnedTuple> {
         if let Some(frame) = frame {
             let mut result = Vec::new();
             for f in formals {
@@ -233,12 +235,12 @@ impl<'i> RelationScan<'i> {
 }
 
 impl<'i> Iterator for RelationScan<'i> {
-    type Item = storage::Tuple;
+    type Item = OwnedTuple;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             RelationScan::Extensional { table, scan } =>
-                scan.next().map(|t| t.clone()),
+                scan.next().map(|t| t.to_vec()),
             RelationScan::Intensional { formals, scan } =>
                 Self::tuple_from_frame(formals.clone(), scan.next()),
             RelationScan::NoTableFound => None
@@ -269,7 +271,7 @@ fn deconstruct_term(t: ast::Term) -> Result<(String, QueryParams)> {
     }
 }
 
-fn create_tuple(p: QueryParams) -> Result<storage::Tuple> {
+fn create_tuple(p: QueryParams) -> Result<OwnedTuple> {
     let mut result = Vec::new();
     for param in p.params {
         result.push(to_atom(param)?);
@@ -347,9 +349,10 @@ pub fn simple_assert(engine: &mut storage::StorageEngine,
                      fact: ast::Term) -> Result<()> {
     let (head, rest) = deconstruct_term(fact)?;
     let tuple = create_tuple(rest)?;
-    let relation = storage::Relation::Extension(storage::Table::new());
+    let arity = tuple.len();
+    let relation = storage::Relation::Extension(storage::Table::new(arity));
     match *engine.get_or_create_relation(head.clone(), relation) {
-        Extension(ref mut t) => Ok(t.assert(tuple)),
+        Extension(ref mut t) => t.assert(tuple),
         Intension(_) => Err(Error::NotExtensional(head))
     }
 }
