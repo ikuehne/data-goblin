@@ -23,6 +23,7 @@ fn main() {
     driver::Driver::from_stdin(DEFAULT_DATA_DIR.to_string()).run()
 }
 
+// Integration tests go here.
 #[cfg(test)]
 mod tests {
     use ast;
