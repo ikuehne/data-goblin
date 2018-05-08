@@ -22,3 +22,44 @@ const DEFAULT_DATA_DIR: &'static str = "./data/";
 fn main() {
     driver::Driver::from_stdin(DEFAULT_DATA_DIR.to_string()).run()
 }
+
+#[cfg(test)]
+mod tests {
+    use ast;
+    use storage::*;
+    use eval::*;
+    use lexer::Lexer;
+    use parser::Parser;
+
+    use std::collections::HashSet;
+
+    #[test]
+    fn simple_sentences() {
+        let engine = StorageEngine::new("test_data/grammar".to_string())
+            .unwrap();
+        let query = "simple_sentence(SUBJECT, VERB, OBJECT)?";
+        let lexer = Lexer::new(query.chars()).map(Result::unwrap);
+        let parser = Parser::new(lexer).map(Result::unwrap);
+        let sentences: HashSet<String> = parser.map(|line| {
+            if let ast::Line::Query(t) = line {
+                scan_from_term(&engine, t).unwrap()
+            } else {
+                panic!("parsed query as assertion");
+            }
+        }).next().unwrap().map(|frame| {
+            let subject = frame.get("SUBJECT").unwrap();
+            let verb = frame.get("VERB").unwrap();
+            let object = frame.get("OBJECT").unwrap();
+            format!("{} {} {}", subject, verb, object)
+        }).collect();
+
+        assert!(sentences.contains("he throws it"));
+        assert!(sentences.contains("she eats him"));
+        assert!(sentences.contains("i throw it"));
+
+        assert!(!sentences.contains("him throws it"));
+        assert!(!sentences.contains("she eat him"));
+        assert!(!sentences.contains("i throws it"));
+    }
+}
+
