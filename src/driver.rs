@@ -9,7 +9,6 @@ use parser::Parser;
 use std;
 use std::fmt::Display;
 use std::io;
-use std::io::stdin;
 use std::io::stdout;
 use std::io::Read;
 use std::io::Write;
@@ -84,11 +83,11 @@ impl Driver {
         })
     }
 
-    fn from_reader<Reader: io::Read>(
+    fn from_reader<'a, Reader: io::Read + 'static>(
             reader: Reader, data_dir: String, mode: DriverMode)
                 -> Driver {
         let buffered = io::BufReader::new(reader);
-        let chars = stdin().chars().map(unwrap_or_abort);
+        let chars = buffered.chars().map(unwrap_or_abort);
 
         let lexer = Lexer::new(chars);
         let toks = lexer.map(unwrap_or_abort);
