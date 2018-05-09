@@ -180,23 +180,12 @@ impl<'a> Iterator for Join<'a> {
             match self.right.next() {
                 None => {
                     self.right.reset();
-                    if let Some(r) = self.right.next() {
-
-                    match self.left.next() {
-                        None => {
-                            self.current_left = None;
-                            return None;
-                        },
-                        Some(l) => {
-                            self.current_left = Some(l.clone());
-                            if let Some(result) = merge_frames(&l, &r) {
-                                return Some(result);
-                            };
-                        }
-                    }
-                    } else {
-                        return None;
-                    }
+                    let r = self.right.next()?;
+                    let l = self.left.next()?;
+                    self.current_left = Some(l.clone());
+                    if let Some(result) = merge_frames(&l, &r) {
+                        return Some(result);
+                    };
                 },
                 Some(r) => {
                     if let Some(ref l) = self.current_left {
@@ -205,7 +194,7 @@ impl<'a> Iterator for Join<'a> {
                         }
                     } else {
                         // Left iterator hasn't been advanced
-                        let l = self.left.next()?.clone();
+                        let l = self.left.next()?;
                         self.current_left = Some(l.clone());
                         if let Some(result) = merge_frames(&l, &r) {
                             return Some(result);
