@@ -29,7 +29,7 @@ fn main() {
 mod tests {
     use ast;
     use storage::*;
-    use eval::*;
+    use eval;
     use lexer::Lexer;
     use parser::Parser;
 
@@ -44,7 +44,7 @@ mod tests {
         let parser = Parser::new(lexer).map(Result::unwrap);
         let sentences: HashSet<String> = parser.map(|line| {
             if let ast::Line::Query(t) = line {
-                scan_from_term(&engine, t).unwrap()
+                eval::query(&engine, t).unwrap()
             } else {
                 panic!("parsed query as assertion");
             }

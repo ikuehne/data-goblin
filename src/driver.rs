@@ -116,7 +116,7 @@ impl Driver {
                     DriverMode::Quiet => (),
                     DriverMode::Interactive => {
                         let engine = &storage.read().unwrap();
-                        for tuple in eval::scan_from_term(engine, t)? {
+                        for tuple in eval::query(engine, t)? {
                             println!("{:?}", tuple);
                         }
                     }

@@ -221,7 +221,7 @@ impl<'a> ResettableIterator for Join<'a> {
 pub type Frame<'a> = HashMap<String, &'a str>;
 
 #[derive(Debug)]
-pub struct Pattern {
+struct Pattern {
     params: Vec<ast::AtomicTerm>
 }
 
@@ -328,7 +328,7 @@ fn plan_joins<'a>(engine: &'a storage::StorageEngine,
     match head {
         None => Err(Error::MalformedLine("Empty Join list".to_string())),
         Some(term) => {
-            let head_term: Frames<'a> = scan_from_term(engine, term)?;
+            let head_term: Frames<'a> = query(engine, term)?;
             if joins.len() == 0 {
                 Ok(head_term)
             } else {
@@ -348,8 +348,10 @@ fn to_variables(terms: Vec<ast::AtomicTerm>) -> Result<Vec<String>> {
     }).collect()
 }
 
-pub fn scan_from_term<'a>(engine: &'a storage::StorageEngine,
-                          query: ast::Term) -> Result<Frames<'a>> {
+/// Given a query, return all variable assignments over the database that
+/// satisfy that query.
+pub fn query<'a>(engine: &'a storage::StorageEngine,
+                 query: ast::Term) -> Result<Frames<'a>> {
     let (head, rest) = deconstruct_term(query)?;
 
     let relation =
@@ -367,8 +369,8 @@ pub fn scan_from_term<'a>(engine: &'a storage::StorageEngine,
     }
 }
 
-pub fn simple_assert(engine: &mut storage::StorageEngine,
-                     fact: ast::Term) -> Result<()> {
+fn simple_assert(engine: &mut storage::StorageEngine,
+                 fact: ast::Term) -> Result<()> {
     let (head, rest) = deconstruct_term(fact)?;
     let tuple = create_fact(rest)?;
     let arity = tuple.len();
@@ -379,8 +381,8 @@ pub fn simple_assert(engine: &mut storage::StorageEngine,
     }
 }
 
-pub fn add_rule_to_view(engine: &mut storage::StorageEngine,
-                        rule: ast::Rule) -> Result<()> {
+fn add_rule_to_view(engine: &mut storage::StorageEngine,
+                    rule: ast::Rule) -> Result<()> {
     let (name, definition) = deconstruct_term(rule.head)?;
     let relation = storage::Relation::Intension(
         storage::View { formals: definition.params, definition: Vec::new() }
@@ -392,6 +394,7 @@ pub fn add_rule_to_view(engine: &mut storage::StorageEngine,
     }
 }
 
+/// Add a fact or rule to the database.
 pub fn assert(engine: &mut storage::StorageEngine,
               fact: ast::Rule) -> Result<()> {
     if fact.body.len() == 0 {

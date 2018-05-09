@@ -282,7 +282,8 @@ mod tests {
     fn test_table(v: &[Vec<&str>]) -> Table {
         let mut t = Table::new(v[0].len());
         for tuple in v {
-            t.assert(tuple.into_iter().map(|r| r.to_string()).collect());
+            t.assert(tuple.into_iter().map(|r| r.to_string()).collect())
+             .unwrap();
         }
         t
     }
