@@ -224,6 +224,10 @@ struct Pattern {
 }
 
 impl Pattern {
+    fn new(params: Vec<ast::AtomicTerm>) -> Self {
+        Pattern { params }
+    }
+
     /// Match the tuple against this pattern, returning the variable bindings
     /// that make the match.
     /// 
@@ -322,11 +326,11 @@ pub fn query<'a>(engine: &'a storage::StorageEngine,
     match relation {
         Extension(ref table) => {
             let scan = ExtensionalScan::new(table);
-            Ok(Box::new(PatternMatch::new(rest, scan)))
+            Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
         },
         Intension(view) => {
             let scan = IntensionalScan::new(engine, view)?;
-            Ok(Box::new(PatternMatch::new(rest, scan)))
+            Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
         }
     }
 }
@@ -339,7 +343,7 @@ pub fn query<'a>(engine: &'a storage::StorageEngine,
 fn simple_assert(engine: &mut storage::StorageEngine,
                  fact: ast::Term) -> Result<()> {
     let (head, rest) = deconstruct_term(fact)?;
-    let tuple = to_atoms(rest.params)?;
+    let tuple = to_atoms(rest)?;
     let arity = tuple.len();
     let relation = storage::Relation::Extension(storage::Table::new(arity));
     match *engine.get_or_create_relation(head.clone(), relation) {
@@ -352,7 +356,7 @@ fn add_rule_to_view(engine: &mut storage::StorageEngine,
                     rule: ast::Rule) -> Result<()> {
     let (name, definition) = deconstruct_term(rule.head)?;
     let relation = storage::Relation::Intension(
-        storage::View { formals: definition.params, definition: Vec::new() }
+        storage::View { formals: definition, definition: Vec::new() }
     );
     let mut rel_view = engine.get_or_create_relation(name.clone(), relation);
     match *rel_view {
@@ -406,16 +410,9 @@ fn to_variables(v: Vec<ast::AtomicTerm>) -> Result<Vec<String>> {
 /// Deconstruct a term into a head and its parameters.
 /// 
 /// Fails if the term is not compound.
-fn deconstruct_term(t: ast::Term) -> Result<(String, Pattern)> {
+fn deconstruct_term(t: ast::Term) -> Result<(String, Vec<ast::AtomicTerm>)> {
     match t {
-        ast::Term::Atomic(a) => Ok((to_atom(a)?,
-                                    Pattern { params :Vec::new() })),
-        ast::Term::Compound(cterm) => {
-            let mut rest = Vec::new();
-            for param in cterm.params.into_iter() {
-                rest.push(param);
-            }
-            Ok((cterm.relation, Pattern { params: rest }))
-        }
+        ast::Term::Atomic(a) => Ok((to_atom(a)?, Vec::new())),
+        ast::Term::Compound(cterm) => Ok((cterm.relation, cterm.params))
     }
 }
