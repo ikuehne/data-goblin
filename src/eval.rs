@@ -12,35 +12,30 @@ use std::collections::HashMap;
 use std::collections::LinkedList;
 use std::marker::PhantomData;
 
-//
-// Resettable iterators. Necessary for plan nodes.
-//
-
 pub trait ResettableIterator: Iterator {
+    /// Sets the iterator back to the beginning.
+    /// 
+    /// I.e., the next call to `next` should return the same thing as when the
+    /// iterator was first created.
     fn reset(&mut self);
 }
 
 //
-// Plan data structures.
+// TuplePlans.
 //
 
-pub trait PlanNode<'a>: ResettableIterator<Item = Frame<'a>> {}
-impl<'a, T: ResettableIterator<Item = Frame<'a>>> PlanNode<'a> for T {}
+/// Plans that return tuples.
+pub trait TuplePlan<'a>: ResettableIterator<Item = Tuple<'a>> {}
+impl<'a, T: ResettableIterator<Item = Tuple<'a>>> TuplePlan<'a> for T {}
 
-pub trait Plan<'a>: ResettableIterator<Item = Tuple<'a>> {}
-impl<'a, T: ResettableIterator<Item = Tuple<'a>>> Plan<'a> for T {}
-
-// This type alias is convenient due to an annoying compiler bug (issue #23856).
-pub type Assignments<'a> = Box<PlanNode<'a, Item = Frame<'a>> + 'a>;
-
-// Simple scans over tables and views.
-
+/// A (resetable) scan over an extensional relation.
 struct ExtensionalScan<'a> {
     table: &'a storage::Table,
     scan: storage::TableScan<'a>
 }
 
 impl<'a> ExtensionalScan<'a> {
+    /// Create a new ExtensionalScan staring at the beginning of this table.
     fn new(table: &'a storage::Table) -> Self {
         ExtensionalScan {
             table,
@@ -63,17 +58,30 @@ impl<'a> ResettableIterator for ExtensionalScan<'a> {
     }
 }
 
+/// A (resetable) scan over an intensional relation.
 struct IntensionalScan<'a> {
-    formals: Vec<String>,
-    scan: Assignments<'a>
+    column_names: Vec<String>,
+    scan: Frames<'a>
 }
 
 impl<'a> IntensionalScan<'a> {
-    fn new(formals: Vec<String>, scan: Assignments<'a>) -> Self {
-        IntensionalScan {
-            formals,
-            scan
+    /// Create a new scan based on the given view definition, running against
+    /// the given storage engine.
+    fn new(engine: &'a storage::StorageEngine, view: &'a storage::View)
+            -> Result<Self> {
+        let mut joins = LinkedList::new();
+
+        for term in &view.definition[0] {
+            joins.push_back(term.clone());
         }
+
+        let scan = plan_joins(engine, joins)?;
+        let column_names = to_variables(view.formals.clone())?;
+
+        Ok(IntensionalScan {
+            column_names,
+            scan
+        })
     }
 }
 
@@ -83,7 +91,7 @@ impl<'a> Iterator for IntensionalScan<'a> {
     fn next(&mut self) -> Option<Tuple<'a>> {
         self.scan.next().map(|frame| {
             let mut result: Tuple = Vec::new();
-            for f in &self.formals {
+            for f in &self.column_names {
                 match frame.get(f) {
                     Some(binding) => result.push(binding),
                     None => panic!("frame in view does not match schema")
@@ -100,46 +108,62 @@ impl<'a> ResettableIterator for IntensionalScan<'a> {
     }
 }
 
+//
+// FramePlans.
+//
+
+/// Plans that return frames.
+pub trait FramePlan<'a>: ResettableIterator<Item = Frame<'a>> {}
+impl<'a, T: ResettableIterator<Item = Frame<'a>>> FramePlan<'a> for T {}
+
+// This type alias is convenient due to an annoying compiler bug (issue #23856).
+// Just represents a trait object for a FramePlan with the given storage
+// lifetime. The additional `+ 'a` is necessary because trait objects lose
+// lifetime information.
+pub type Frames<'a> = Box<FramePlan<'a, Item = Frame<'a>> + 'a>;
+
 /// Takes tuples a `Scan` and matches them with the given pattern, returning the
 /// assignment of any variables in the pattern to the contents of the tuples.
-struct PatternMatch<'a, P: Plan<'a>> {
+struct PatternMatch<'a, P: TuplePlan<'a>> {
     pattern: Pattern,
-    plan: P,
+    child: P,
     _marker: PhantomData<&'a ()>
 }
 
-impl<'a, P: Plan<'a>> PatternMatch<'a, P> {
-    fn new(pattern: Pattern, plan: P) -> Self {
+impl<'a, P: TuplePlan<'a>> PatternMatch<'a, P> {
+    fn new(pattern: Pattern, child: P) -> Self {
         PatternMatch {
             pattern,
-            plan,
+            child,
             _marker: PhantomData::default()
         }
     }
 }
 
-impl<'a, P: Plan<'a>> Iterator for PatternMatch<'a, P> {
+impl<'a, P: TuplePlan<'a>> Iterator for PatternMatch<'a, P> {
     type Item = Frame<'a>;
 
     fn next(&mut self) -> Option<Frame<'a>> {
-        self.plan.next().and_then(|t| self.pattern.match_tuple(t))
+        self.child.next().and_then(|t| self.pattern.match_tuple(t))
     }
 }
 
-impl<'a, P: Plan<'a>> ResettableIterator for PatternMatch<'a, P> {
+impl<'a, P: TuplePlan<'a>> ResettableIterator for PatternMatch<'a, P> {
     fn reset(&mut self) {
-        self.plan.reset();
+        self.child.reset();
     }
 }
 
+/// Represents a cross join between two FramePlans.
 struct Join<'a> {
-    left: Assignments<'a>,
-    right: Assignments<'a>,
+    left: Frames<'a>,
+    right: Frames<'a>,
+    /// Where are we currently in the left scan? `None` if we haven't started.
     current_left: Option<Frame<'a>>
 }
 
 impl<'a> Join<'a> {
-    fn new(left: Assignments<'a>, right: Assignments<'a>) -> Join<'a> {
+    fn new(left: Frames<'a>, right: Frames<'a>) -> Join<'a> {
         Join {
             left,
             right,
@@ -213,9 +237,10 @@ pub struct Pattern {
 }
 
 impl Pattern {
-    /* Check if the given tuple can match with the query parameters, and
-     * return a map of variable bindings.
-     */
+    /// Match the tuple against this pattern, returning the variable bindings
+    /// that make the match.
+    /// 
+    /// Return `None` if the given tuple does not match this pattern.
     fn match_tuple<'a>(&mut self, t: storage::Tuple<'a>) -> Option<Frame<'a>> {
         // Ensure each variable is bound to exactly one atom
         let mut variable_bindings: HashMap<String, &str> = HashMap::new();
@@ -309,30 +334,20 @@ fn create_fact<'a>(p: Pattern) -> Result<Vec<String>> {
 }
 
 fn plan_joins<'a>(engine: &'a storage::StorageEngine,
-                  mut joins: LinkedList<ast::Term>) -> Result<Assignments<'a>> {
+                  mut joins: LinkedList<ast::Term>) -> Result<Frames<'a>> {
     let head = joins.pop_front();
     match head {
         None => Err(Error::MalformedLine("Empty Join list".to_string())),
         Some(term) => {
-            let head_term: Assignments<'a> = scan_from_term(engine, term)?;
+            let head_term: Frames<'a> = scan_from_term(engine, term)?;
             if joins.len() == 0 {
                 Ok(head_term)
             } else {
-                let rest_term: Assignments<'a> = plan_joins(engine, joins)?;
+                let rest_term: Frames<'a> = plan_joins(engine, joins)?;
                 Ok(Box::new(Join::new(head_term, rest_term)))
             }
         }
     }
-}
-
-fn plan_view<'a>(engine: &'a storage::StorageEngine,
-                 v: &storage::View) -> Result<Assignments<'a>> {
-    let mut joins = LinkedList::new();
-    // TODO - don't clone this whole list
-    for term in &v.definition[0] {
-        joins.push_back(term.clone());
-    }
-    plan_joins(engine, joins)
 }
 
 fn to_variables(terms: Vec<ast::AtomicTerm>) -> Result<Vec<String>> {
@@ -345,7 +360,7 @@ fn to_variables(terms: Vec<ast::AtomicTerm>) -> Result<Vec<String>> {
 }
 
 pub fn scan_from_term<'a>(engine: &'a storage::StorageEngine,
-                          query: ast::Term) -> Result<Assignments<'a>> {
+                          query: ast::Term) -> Result<Frames<'a>> {
     let (head, rest) = deconstruct_term(query)?;
 
     let relation =
@@ -357,9 +372,7 @@ pub fn scan_from_term<'a>(engine: &'a storage::StorageEngine,
             Ok(Box::new(PatternMatch::new(rest, scan)))
         },
         Intension(view) => {
-            let formals = to_variables(view.formals.clone())?;
-            let view_plan = plan_view(engine, &view)?;
-            let scan = IntensionalScan::new(formals, view_plan);
+            let scan = IntensionalScan::new(engine, view)?;
             Ok(Box::new(PatternMatch::new(rest, scan)))
         }
     }
