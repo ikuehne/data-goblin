@@ -6,7 +6,8 @@ use storage;
 use storage::Relation::*;
 use storage::Tuple;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::collections::LinkedList;
 use std::marker::PhantomData;
 
@@ -211,11 +212,72 @@ impl<'a> Plan for Join<'a> {
     }
 }
 
+struct BottomUp<'a> {
+    all_frames: Vec<Frame<'a>>,
+    index: usize
+}
+
+impl<'a> BottomUp<'a> {
+    fn new(name: String, formals: Vec<String>,
+           base_scans: Vec<Frames<'a>>, recursive_rules: Vec<Vec<ast::Term>>,
+           engine: &'a storage::StorageEngine) -> Result<BottomUp<'a>> {
+        let mut all_frames = HashSet::new();
+
+        for scan in base_scans {
+            for frame in scan {
+                all_frames.insert(frame);
+            }
+        }
+
+        // Now, repeatedly apply recursive rules.
+        let mut new_tuple = false;
+        while new_tuple {
+            new_tuple = false;
+            for rule in &recursive_rules {
+                // Apply the given rule and see if we get any new tuples
+                let scan = plan_recursive_rule(engine,
+                                               &name,
+                                               &rule,
+                                               &formals,
+                                               &all_frames)?;
+                let mut new_frames = Vec::new();
+                for frame in scan {
+                    if !all_frames.contains(&frame) {
+                        new_tuple = true;
+                        new_frames.push(frame);
+                    }
+                }
+                for frame in new_frames {
+                    all_frames.insert(frame);
+                }
+            }
+        }
+
+        Ok(BottomUp { all_frames: all_frames.into_iter().collect(), index: 0 })
+    }
+}
+
+impl<'a> Iterator for BottomUp<'a> {
+    type Item = Frame<'a>;
+
+    fn next(&mut self) -> Option<Frame<'a>> {
+        let result = self.all_frames.get(self.index);
+        self.index += 1;
+        return result.map(|frame| frame.clone());
+    }
+}
+
+impl<'a> Plan for BottomUp<'a> {
+    fn reset(&mut self) {
+        self.index = 0;
+    }
+}
+
 //
 // Frames and pattern matching.
 //
 
-pub type Frame<'a> = HashMap<String, &'a str>;
+pub type Frame<'a> = BTreeMap<String, &'a str>;
 
 #[derive(Debug)]
 struct Pattern {
@@ -233,7 +295,7 @@ impl Pattern {
     /// Return `None` if the given tuple does not match this pattern.
     fn match_tuple<'a>(&mut self, t: storage::Tuple<'a>) -> Option<Frame<'a>> {
         // Ensure each variable is bound to exactly one atom
-        let mut variable_bindings: HashMap<String, &str> = HashMap::new();
+        let mut variable_bindings = BTreeMap::new();
 
         for i in 0..self.params.len() {
             match self.params[i] {
@@ -257,7 +319,7 @@ impl Pattern {
 
 fn merge_frames<'a>(f1: &Frame<'a>, f2: &Frame<'a>) -> Option<Frame<'a>> {
     // TODO - don't copy these
-    let mut result = HashMap::new();
+    let mut result = BTreeMap::new();
     for (var, binding1) in f1 {
         match f2.get(var) {
             Some(binding2) => { 
@@ -312,6 +374,16 @@ fn plan_joins<'a>(engine: &'a storage::StorageEngine,
         }
     }
 }
+
+fn plan_recursive_rule<'b>(
+        engine: &'b storage::StorageEngine,
+        name: &str,
+        rule: &[ast::Term],
+        formals: &[String],
+        all_frames: &HashSet<Frame>) -> Result<Frames<'b>> {
+    panic!("undefined")
+}
+
 
 /// Given a query, return all variable assignments over the database that
 /// satisfy that query.
