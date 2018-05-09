@@ -68,14 +68,10 @@ impl<'a> IntensionalScan<'a> {
     /// the given storage engine.
     fn new(engine: &'a storage::StorageEngine, view: &'a storage::View)
             -> Result<Self> {
-        let mut joins = LinkedList::new();
-
-        for term in &view.definition[0] {
-            joins.push_back(term.clone());
-        }
-
+        let joins = view.definition[0].clone().into_iter().collect();
         let scan = plan_joins(engine, joins)?;
         let column_names = to_variables(view.formals.clone())?;
+
         Ok(IntensionalScan {
             column_names,
             scan
@@ -88,14 +84,11 @@ impl<'a> Iterator for IntensionalScan<'a> {
 
     fn next(&mut self) -> Option<Tuple<'a>> {
         self.scan.next().map(|frame| {
-            let mut result: Tuple = Vec::new();
-            for f in &self.column_names {
-                match frame.get(f) {
-                    Some(binding) => result.push(binding),
-                    None => panic!("frame in view does not match schema")
-                };
-            }
-            result
+            (&self.column_names).into_iter().map(|f| {
+                *frame.get(f).unwrap_or_else(|| {
+                    panic!("frame in view does not match schema")
+                })
+            }).collect()
         })
     }
 }
