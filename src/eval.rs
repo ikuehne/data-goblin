@@ -135,7 +135,13 @@ impl<'a, P: TuplePlan<'a>> Iterator for PatternMatch<'a, P> {
     type Item = Frame<'a>;
 
     fn next(&mut self) -> Option<Frame<'a>> {
-        self.child.next().and_then(|t| self.pattern.match_tuple(t))
+        loop {
+            let t = self.child.next()?;
+
+            if let Some(f) = self.pattern.match_tuple(t) {
+                return Some(f);
+            }
+        }
     }
 }
 
