@@ -28,6 +28,7 @@ fn unwrap_or_abort<T, E: Display>(res: std::result::Result<T, E>) -> T {
 }
 
 #[derive(Copy, Clone)]
+#[allow(dead_code)]
 enum DriverMode {
     Interactive,
     Quiet

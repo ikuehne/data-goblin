@@ -86,14 +86,6 @@ impl Table {
 }
 
 impl TaggedRelation {
-    fn new(path: String, contents: Relation) -> Self {
-        TaggedRelation {
-            path,
-            contents,
-            dirty: AtomicBool::default()
-        }
-    }
-
     /// Set the "dirty" flag, and return the previous dirty state.
     fn dirty(&self) -> bool {
         self.dirty.swap(true, Ordering::SeqCst)
