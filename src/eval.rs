@@ -84,9 +84,9 @@ impl<'a> Iterator for IntensionalScan<'a> {
 
     fn next(&mut self) -> Option<Tuple<'a>> {
         self.scan.next().map(|frame| {
-            (&self.column_names).into_iter().map(|f| {
-                *frame.get(f).unwrap_or_else(|| {
-                    panic!("frame in view does not match schema")
+            (&self.column_names).into_iter().map(|v| {
+                *frame.get(v).unwrap_or_else(|| {
+                    panic!("frame in view plan missing a column")
                 })
             }).collect()
         })
