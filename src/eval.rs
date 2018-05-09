@@ -10,11 +10,12 @@ use std::collections::HashMap;
 use std::collections::LinkedList;
 use std::marker::PhantomData;
 
-pub trait ResettableIterator: Iterator {
-    /// Sets the iterator back to the beginning.
+/// Plans are simply iterators that can be reset to the beginning.
+pub trait Plan: Iterator {
+    /// Sets the plan back to the beginning.
     /// 
     /// I.e., the next call to `next` should return the same thing as when the
-    /// iterator was first created.
+    /// plan was first created.
     fn reset(&mut self);
 }
 
@@ -23,8 +24,8 @@ pub trait ResettableIterator: Iterator {
 //
 
 /// Plans that return tuples.
-pub trait TuplePlan<'a>: ResettableIterator<Item = Tuple<'a>> {}
-impl<'a, T: ResettableIterator<Item = Tuple<'a>>> TuplePlan<'a> for T {}
+pub trait TuplePlan<'a>: Plan<Item = Tuple<'a>> {}
+impl<'a, T: Plan<Item = Tuple<'a>>> TuplePlan<'a> for T {}
 
 /// A (resetable) scan over an extensional relation.
 struct ExtensionalScan<'a> {
@@ -50,7 +51,7 @@ impl<'a> Iterator for ExtensionalScan<'a> {
     }
 }
 
-impl<'a> ResettableIterator for ExtensionalScan<'a> {
+impl<'a> Plan for ExtensionalScan<'a> {
     fn reset(&mut self) {
         self.scan = self.table.into_iter();
     }
@@ -99,7 +100,7 @@ impl<'a> Iterator for IntensionalScan<'a> {
     }
 }
 
-impl<'a> ResettableIterator for IntensionalScan<'a> {
+impl<'a> Plan for IntensionalScan<'a> {
     fn reset(&mut self) {
         self.scan.reset()
     }
@@ -110,8 +111,8 @@ impl<'a> ResettableIterator for IntensionalScan<'a> {
 //
 
 /// Plans that return frames.
-pub trait FramePlan<'a>: ResettableIterator<Item = Frame<'a>> {}
-impl<'a, T: ResettableIterator<Item = Frame<'a>>> FramePlan<'a> for T {}
+pub trait FramePlan<'a>: Plan<Item = Frame<'a>> {}
+impl<'a, T: Plan<Item = Frame<'a>>> FramePlan<'a> for T {}
 
 // This type alias is convenient due to an annoying compiler bug (issue #23856).
 // Just represents a trait object for a FramePlan with the given storage
@@ -145,7 +146,7 @@ impl<'a, P: TuplePlan<'a>> Iterator for PatternMatch<'a, P> {
     }
 }
 
-impl<'a, P: TuplePlan<'a>> ResettableIterator for PatternMatch<'a, P> {
+impl<'a, P: TuplePlan<'a>> Plan for PatternMatch<'a, P> {
     fn reset(&mut self) {
         self.child.reset();
     }
@@ -203,7 +204,7 @@ impl<'a> Iterator for Join<'a> {
     }
 }
 
-impl<'a> ResettableIterator for Join<'a> {
+impl<'a> Plan for Join<'a> {
     fn reset(&mut self) {
         self.left.reset();
         self.right.reset();
