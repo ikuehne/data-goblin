@@ -34,9 +34,19 @@ impl<'a, T: ResettableIterator<Item = Tuple<'a>>> Plan<'a> for T {}
 pub type Assignments<'a> = Box<PlanNode<'a, Item = Frame<'a>> + 'a>;
 
 // Simple scans over tables and views.
-pub struct ExtensionalScan<'a> {
+
+struct ExtensionalScan<'a> {
     table: &'a storage::Table,
     scan: storage::TableScan<'a>
+}
+
+impl<'a> ExtensionalScan<'a> {
+    fn new(table: &'a storage::Table) -> Self {
+        ExtensionalScan {
+            table,
+            scan: table.into_iter()
+        }
+    }
 }
 
 impl<'a> Iterator for ExtensionalScan<'a> {
@@ -53,62 +63,42 @@ impl<'a> ResettableIterator for ExtensionalScan<'a> {
     }
 }
 
-pub enum RelationScan<'a> {
-    Extensional {
-        table: &'a storage::Table,
-        scan: storage::TableScan<'a>
-    },
-    Intensional {
-        formals: Vec<String>,
-        scan: Assignments<'a>
-    },
-    NoTableFound
+struct IntensionalScan<'a> {
+    formals: Vec<String>,
+    scan: Assignments<'a>
 }
 
-impl<'a> RelationScan<'a> {
-    fn tuple_from_frame(formals: &[String], frame: Frame<'a>) -> Tuple<'a> {
-        let mut result: Tuple = Vec::new();
-        for f in formals {
-            match frame.get(f) {
-                Some(binding) => result.push(binding),
-                None => panic!("frame in view does not match schema")
-            };
+impl<'a> IntensionalScan<'a> {
+    fn new(formals: Vec<String>, scan: Assignments<'a>) -> Self {
+        IntensionalScan {
+            formals,
+            scan
         }
-        result
     }
-
 }
 
-impl<'a> Iterator for RelationScan<'a> {
+impl<'a> Iterator for IntensionalScan<'a> {
     type Item = Tuple<'a>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            RelationScan::Extensional { table: _, scan } =>
-                scan.next().map(|t| t.to_vec()),
-            RelationScan::Intensional { formals, scan } =>
-                scan.next().map(|frame|
-                    Self::tuple_from_frame(&formals, frame)
-                ),
-            RelationScan::NoTableFound => None
-        }
+    fn next(&mut self) -> Option<Tuple<'a>> {
+        self.scan.next().map(|frame| {
+            let mut result: Tuple = Vec::new();
+            for f in &self.formals {
+                match frame.get(f) {
+                    Some(binding) => result.push(binding),
+                    None => panic!("frame in view does not match schema")
+                };
+            }
+            result
+        })
     }
 }
 
-impl<'a> ResettableIterator for RelationScan<'a> {
+impl<'a> ResettableIterator for IntensionalScan<'a> {
     fn reset(&mut self) {
-        match self {
-            RelationScan::Extensional { table, ref mut scan } => {
-                *scan = table.into_iter();
-            },
-            RelationScan::Intensional { formals: _, scan } => {
-                scan.reset();
-            },
-            RelationScan::NoTableFound => ()
-        }
+        self.scan.reset()
     }
 }
-
 
 /// Takes tuples a `Scan` and matches them with the given pattern, returning the
 /// assignment of any variables in the pattern to the contents of the tuples.
@@ -361,19 +351,18 @@ pub fn scan_from_term<'a>(engine: &'a storage::StorageEngine,
     let relation =
         engine.get_relation(head.as_str())
               .ok_or(Error::MalformedLine(format!("No relation found.")))?;
-    let scan = match relation {
-        Extension(ref table) => RelationScan::Extensional {
-            table: table,
-            scan: table.into_iter()
+    match relation {
+        Extension(ref table) => {
+            let scan = ExtensionalScan::new(table);
+            Ok(Box::new(PatternMatch::new(rest, scan)))
         },
-        Intension(view) => RelationScan::Intensional {
-            // TODO: catch this error on creating a view.
-            formals: to_variables(view.formals.clone())?,
-            scan: plan_view(engine, &view)?
-        },
-    };
-
-    Ok(Box::new(PatternMatch::new(rest, scan)))
+        Intension(view) => {
+            let formals = to_variables(view.formals.clone())?;
+            let view_plan = plan_view(engine, &view)?;
+            let scan = IntensionalScan::new(formals, view_plan);
+            Ok(Box::new(PatternMatch::new(rest, scan)))
+        }
+    }
 }
 
 pub fn simple_assert(engine: &mut storage::StorageEngine,
