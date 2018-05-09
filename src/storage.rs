@@ -16,7 +16,6 @@ use std::io;
 use std::iter::IntoIterator;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
-use std::slice;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // Perhaps we want this to be generic in the future to allow swapping out
@@ -25,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // kind of interface works.
 
 /// A `Tuple` is simply an ordered collection of atoms.
-pub type Tuple<'a> = &'a [String];
+pub type Tuple<'a> = Vec<&'a str>;
 
 /// A `Table` is an extensional relation in the database.
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,7 +48,6 @@ pub enum Relation {
 }
 
 impl Relation {
-
     pub fn write_back(&self, path: &str) {
         let out =
             io::BufWriter::new(fs::File::create(path).unwrap());
@@ -134,8 +132,11 @@ impl<'a> Iterator for TableScan<'a> {
         }
 
         let slice = self.index..self.index + self.table.arity;
-        let result = &self.table.contents[slice];
+        let result: Vec<_> =
+            self.table.contents[slice].into_iter().map(|s| s.as_str()).collect();
+
         self.index += self.table.arity;
+
         Some(result)
     }
 }

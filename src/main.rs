@@ -1,6 +1,7 @@
 #![feature(custom_attribute)]
 #![feature(io)]
 #![feature(option_filter)]
+#![feature(trait_alias)]
 #![feature(type_ascription)]
 
 pub mod ast;

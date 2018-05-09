@@ -4,31 +4,49 @@
 
 use ast;
 use error::*;
-use std::collections::HashMap;
-use std::collections::LinkedList;
-use std::collections::HashSet;
 use storage;
 use storage::Relation::*;
+use storage::Tuple;
+
+use std::collections::HashMap;
+use std::collections::LinkedList;
+use std::marker::PhantomData;
 
 #[derive(Debug)]
-pub struct QueryParams {
+/// A `FrameScan` is a struct that produces frames.
+pub enum FrameScan<'a> {
+    Binder {
+        query: Pattern,
+        scan: Box<RelationScan<'a>>
+    },
+    /// A `JoinScan` performs a cross join on its two child FrameScans.
+    /// For each Frame on the left, it looks at each Frame on the right, and if
+    /// the variable bindings match, it produces a combined Frame.
+    JoinScan {
+        left: Box<FrameScan<'a>>,
+        right: Box<FrameScan<'a>>,
+        current_left: Option<Frame<'a>>
+    }
+}
+
+//
+// Processing queries into plans.
+//
+
+#[derive(Debug)]
+pub struct Pattern {
     params: Vec<ast::AtomicTerm>
 }
 
-pub type Frame = HashMap<String, String>;
+pub type Frame<'a> = HashMap<String, &'a str>;
 
-pub type OwnedTuple = Vec<String>;
-
-impl QueryParams {
-    
+impl Pattern {
     /* Check if the given tuple can match with the query parameters, and
      * return a map of variable bindings.
      */
-    fn match_tuple<'a>(&'a mut self, t: storage::Tuple<'a>)
-        -> Option<Frame> {
-
+    fn match_tuple<'a>(&mut self, t: storage::Tuple<'a>) -> Option<Frame<'a>> {
         // Ensure each variable is bound to exactly one atom
-        let mut variable_bindings: HashMap<String, String> = HashMap::new();
+        let mut variable_bindings: HashMap<String, &str> = HashMap::new();
 
         for i in 0..self.params.len() {
             match self.params[i] {
@@ -39,7 +57,7 @@ impl QueryParams {
                 },
                 ast::AtomicTerm::Variable(ref s) => {
                     let binding = variable_bindings.entry(s.to_string())
-                        .or_insert(t[i].clone());
+                        .or_insert(t[i]);
                     if *binding != t[i] {
                         return None;
                     }
@@ -50,26 +68,7 @@ impl QueryParams {
     }
 }
 
-#[derive(Debug)]
-/// A `FrameScan` is a struct that produces frames.
-pub enum FrameScan<'i> {
-    /// A `Binder` takes tuples from a QueryResult and binds them according
-    /// to the given query, producing frames.
-    Binder {
-        query: QueryParams,
-        scan: Box<RelationScan<'i>>
-    },
-    /// A `JoinScan` performs a cross join on its two child FrameScans.
-    /// For each Frame on the left, it looks at each Frame on the right, and if
-    /// the variable bindings match, it produces a combined Frame.
-    JoinScan {
-        left: Box<FrameScan<'i>>,
-        right: Box<FrameScan<'i>>,
-        current_left: Option<Frame>
-    }
-}
-
-impl<'i> FrameScan<'i> {
+impl<'a> FrameScan<'a> {
 
     fn reset(&mut self) {
         match self {
@@ -83,7 +82,7 @@ impl<'i> FrameScan<'i> {
     }
 }
 
-fn merge_frames<'i>(f1: &'i Frame, f2: &'i Frame) -> Option<Frame> {
+fn merge_frames<'a>(f1: &Frame<'a>, f2: &Frame<'a>) -> Option<Frame<'a>> {
 
     //println!("{:?} merging with {:?}", f1, f2);
     // TODO - don't copy these
@@ -122,14 +121,14 @@ fn merge_frames<'i>(f1: &'i Frame, f2: &'i Frame) -> Option<Frame> {
    
 }
 
-impl<'i> Iterator for FrameScan<'i> {
-    type Item = Frame;
+impl<'a> Iterator for FrameScan<'a> {
+    type Item = Frame<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             FrameScan::Binder { query, scan } => loop {
                 let t = scan.next()?;
-                match query.match_tuple(&t) {
+                match query.match_tuple(t) {
                     None => (),
                     Some(frame) => { return Some(frame); }
                 };
@@ -160,8 +159,8 @@ impl<'i> Iterator for FrameScan<'i> {
                         }
                     },
                     Some(r) => {
-                        if let Some(l) = current_left {
-                            if let Some(result) = merge_frames(l, &r) {
+                        if let Some(l) = current_left.clone() {
+                            if let Some(result) = merge_frames(&l, &r) {
                                 return Some(result);
                             }
                         } else {
@@ -181,19 +180,19 @@ impl<'i> Iterator for FrameScan<'i> {
 }
 
 #[derive(Debug)]
-pub enum RelationScan<'i> {
+pub enum RelationScan<'a> {
     Extensional {
-        table: &'i storage::Table,
-        scan: storage::TableScan<'i>
+        table: &'a storage::Table,
+        scan: storage::TableScan<'a>
     },
     Intensional {
         formals: Vec<ast::AtomicTerm>,
-        scan: FrameScan<'i>
+        scan: FrameScan<'a>
     },
     NoTableFound
 }
 
-impl<'i> RelationScan<'i> {
+impl<'a> RelationScan<'a> {
 
     fn reset(&mut self) {
 
@@ -209,19 +208,19 @@ impl<'i> RelationScan<'i> {
     }
 
     fn tuple_from_frame(formals: Vec<ast::AtomicTerm>, frame: Option<Frame>)
-        -> Option<OwnedTuple> {
+            -> Option<Tuple> {
         if let Some(frame) = frame {
-            let mut result = Vec::new();
+            let mut result: Tuple = Vec::new();
             for f in formals {
                 match f {
                     ast::AtomicTerm::Variable(v) => {
                         match frame.get(&v) {
-                            Some(binding) => result.push(binding.clone()),
+                            Some(binding) => result.push(binding),
                             None => return None
                         };
                     }
                     ast::AtomicTerm::Atom(a) => {
-                        result.push(a.clone());
+                        panic!("Are we sure this is possible?")
                     }
                 }
             }
@@ -234,8 +233,8 @@ impl<'i> RelationScan<'i> {
 
 }
 
-impl<'i> Iterator for RelationScan<'i> {
-    type Item = OwnedTuple;
+impl<'a> Iterator for RelationScan<'a> {
+    type Item = Tuple<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
@@ -257,21 +256,21 @@ fn to_atom(t: ast::AtomicTerm) -> Result<String> {
 }
 
 
-fn deconstruct_term(t: ast::Term) -> Result<(String, QueryParams)> {
+fn deconstruct_term(t: ast::Term) -> Result<(String, Pattern)> {
     match t {
         ast::Term::Atomic(a) => Ok((to_atom(a)?,
-                                    QueryParams { params :Vec::new() })),
+                                    Pattern { params :Vec::new() })),
         ast::Term::Compound(cterm) => {
             let mut rest = Vec::new();
             for param in cterm.params.into_iter() {
                 rest.push(param);
             }
-            Ok((cterm.relation, QueryParams { params: rest }))
+            Ok((cterm.relation, Pattern { params: rest }))
         }
     }
 }
 
-fn create_tuple(p: QueryParams) -> Result<OwnedTuple> {
+fn create_fact<'a>(p: Pattern) -> Result<Vec<String>> {
     let mut result = Vec::new();
     for param in p.params {
         result.push(to_atom(param)?);
@@ -302,8 +301,8 @@ fn scan_from_join_list(engine: &storage::StorageEngine,
     }
 }
 
-fn scan_from_view<'i>(engine: &'i storage::StorageEngine,
-                  v: &storage::View) -> Result<FrameScan<'i>> {
+fn scan_from_view<'a>(engine: &'a storage::StorageEngine,
+                  v: &storage::View) -> Result<FrameScan<'a>> {
     let mut joins = LinkedList::new();
     // TODO - don't clone this whole list
     for term in &v.definition[0] {
@@ -348,7 +347,7 @@ pub fn scan_from_term(engine: &storage::StorageEngine,
 pub fn simple_assert(engine: &mut storage::StorageEngine,
                      fact: ast::Term) -> Result<()> {
     let (head, rest) = deconstruct_term(fact)?;
-    let tuple = create_tuple(rest)?;
+    let tuple = create_fact(rest)?;
     let arity = tuple.len();
     let relation = storage::Relation::Extension(storage::Table::new(arity));
     match *engine.get_or_create_relation(head.clone(), relation) {
