@@ -1,6 +1,4 @@
 /// Evaluator for dead-simple queries.
-/// 
-/// Intended mostly as a skeleton while we work out architecture.
 
 use ast;
 use error::*;
@@ -77,7 +75,6 @@ impl<'a> IntensionalScan<'a> {
 
         let scan = plan_joins(engine, joins)?;
         let column_names = to_variables(view.formals.clone())?;
-
         Ok(IntensionalScan {
             column_names,
             scan
@@ -290,38 +287,11 @@ fn merge_frames<'a>(f1: &Frame<'a>, f2: &Frame<'a>) -> Option<Frame<'a>> {
     return Some(result);
 }
 
+//
+// Query planning.
+//
 
-fn to_atom(t: ast::AtomicTerm) -> Result<String> {
-    match t {
-        ast::AtomicTerm::Atom(s) => Ok(s),
-        ast::AtomicTerm::Variable(v) =>
-            Err(Error::MalformedLine(format!("unexpected variable: {}", v)))
-    }
-}
-
-
-fn deconstruct_term(t: ast::Term) -> Result<(String, Pattern)> {
-    match t {
-        ast::Term::Atomic(a) => Ok((to_atom(a)?,
-                                    Pattern { params :Vec::new() })),
-        ast::Term::Compound(cterm) => {
-            let mut rest = Vec::new();
-            for param in cterm.params.into_iter() {
-                rest.push(param);
-            }
-            Ok((cterm.relation, Pattern { params: rest }))
-        }
-    }
-}
-
-fn create_fact<'a>(p: Pattern) -> Result<Vec<String>> {
-    let mut result = Vec::new();
-    for param in p.params {
-        result.push(to_atom(param)?);
-    }
-    Ok(result)
-}
-
+/// Plan a cross join over arbitrarily many terms.
 fn plan_joins<'a>(engine: &'a storage::StorageEngine,
                   mut joins: LinkedList<ast::Term>) -> Result<Frames<'a>> {
     let head = joins.pop_front();
@@ -337,15 +307,6 @@ fn plan_joins<'a>(engine: &'a storage::StorageEngine,
             }
         }
     }
-}
-
-fn to_variables(terms: Vec<ast::AtomicTerm>) -> Result<Vec<String>> {
-    let err_msg = "atom appeared as view parameter";
-    terms.into_iter().map(|t| match t {
-        ast::AtomicTerm::Atom(_) =>
-            Err(Error::MalformedLine(err_msg.to_string())),
-        ast::AtomicTerm::Variable(v) => Ok(v)
-    }).collect()
 }
 
 /// Given a query, return all variable assignments over the database that
@@ -369,10 +330,15 @@ pub fn query<'a>(engine: &'a storage::StorageEngine,
     }
 }
 
+//
+// Modifying the database.
+//
+
+/// Add a simple fact (one with no variables) to the database.
 fn simple_assert(engine: &mut storage::StorageEngine,
                  fact: ast::Term) -> Result<()> {
     let (head, rest) = deconstruct_term(fact)?;
-    let tuple = create_fact(rest)?;
+    let tuple = to_atoms(rest.params)?;
     let arity = tuple.len();
     let relation = storage::Relation::Extension(storage::Table::new(arity));
     match *engine.get_or_create_relation(head.clone(), relation) {
@@ -401,5 +367,54 @@ pub fn assert(engine: &mut storage::StorageEngine,
         simple_assert(engine, fact.head)
     } else {
         add_rule_to_view(engine, fact)
+    }
+}
+
+//
+// Processing queries.
+//
+
+/// Attempt to convert an AtomicTerm to an atom.
+fn to_atom(t: ast::AtomicTerm) -> Result<String> {
+    match t {
+        ast::AtomicTerm::Atom(a) => Ok(a),
+        ast::AtomicTerm::Variable(v) =>
+            Err(Error::MalformedLine(format!("unexpected variable: {}", v)))
+    }
+}
+
+/// Attempt to convert an AtomicTerm to a variable.
+fn to_variable(t: ast::AtomicTerm) -> Result<String> {
+    match t {
+        ast::AtomicTerm::Atom(a) =>
+            Err(Error::MalformedLine(format!("unexpected atom: {}", a))),
+        ast::AtomicTerm::Variable(v) => Ok(v)
+    }
+}
+
+/// Convert a vector of AtomicTerms to atoms, failing if any are variables.
+fn to_atoms(v: Vec<ast::AtomicTerm>) -> Result<Vec<String>> {
+    v.into_iter().map(to_atom).collect()
+}
+
+/// Convert a vector of AtomicTerms to variables, failing if any are atoms.
+fn to_variables(v: Vec<ast::AtomicTerm>) -> Result<Vec<String>> {
+    v.into_iter().map(to_variable).collect()
+}
+
+/// Deconstruct a term into a head and its parameters.
+/// 
+/// Fails if the term is not compound.
+fn deconstruct_term(t: ast::Term) -> Result<(String, Pattern)> {
+    match t {
+        ast::Term::Atomic(a) => Ok((to_atom(a)?,
+                                    Pattern { params :Vec::new() })),
+        ast::Term::Compound(cterm) => {
+            let mut rest = Vec::new();
+            for param in cterm.params.into_iter() {
+                rest.push(param);
+            }
+            Ok((cterm.relation, Pattern { params: rest }))
+        }
     }
 }
