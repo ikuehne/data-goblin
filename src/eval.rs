@@ -68,11 +68,34 @@ struct IntensionalScan<'s: 'a, 'a> {
 impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
     /// Create a new scan based on the given view definition, running against
     /// the given storage engine.
-    fn from_view(engine: &'s storage::StorageEngine, view: &'s storage::View)
-            -> Result<IntensionalScan<'s, 's>> {
-        let joins: Result<_> = view.definition[0].clone().into_iter()
-            .map(|term| query(engine, term)).collect();
-        let scan = plan_joins(joins?);
+    fn from_view(name: &str,
+                 engine: &'s storage::StorageEngine,
+                 view: &'s storage::View) -> Result<IntensionalScan<'s, 's>> {
+        let mut recursive = false;
+        let mut base_scans = Vec::new();
+        let mut recursive_rules = Vec::new();
+        for rule in &view.definition {
+            if is_recursive(name, rule.to_vec())? {
+                recursive = true;
+                recursive_rules.push(rule.clone());
+            } else {
+                let mut joins = LinkedList::new();
+                for term in rule {
+                    joins.push_back(query(engine, term.clone())?);
+                }
+                base_scans.push(plan_joins(joins));
+            }
+        }
+
+        let scan: Frames<'s, 's> = if recursive {
+            Box::new(BottomUp::new(
+                    name, to_variables(view.formals.clone())?,
+                    base_scans, recursive_rules, engine)?)
+        }
+        else {
+            Box::new(Chain::new(base_scans))
+        };
+
         let column_names = to_variables(view.formals.clone())?;
 
         Ok(IntensionalScan {
@@ -219,13 +242,49 @@ impl<'s: 'a, 'a> Plan for Join<'s, 'a> {
     }
 }
 
+struct Chain<'s: 'a, 'a> {
+    scans: Vec<Frames<'s, 'a>>,
+    current: usize
+}
+
+impl<'s: 'a, 'a> Chain<'s, 'a> {
+    fn new(scans: Vec<Frames<'s, 'a>>) -> Chain<'s, 'a> {
+        Chain { scans, current: 0 }
+    }
+}
+
+impl<'s: 'a, 'a> Iterator for Chain<'s, 'a> {
+    type Item = Frame<'s>;
+
+    fn next(&mut self) -> Option<Frame<'s>> {
+        loop {
+            if self.current == self.scans.len() {
+                return None;
+            }
+            match self.scans[self.current].next() {
+                None => { self.current += 1; },
+                Some(frame) => { return Some(frame); }
+            }
+        }
+    }
+}
+
+impl<'s: 'a, 'a> Plan for Chain<'s, 'a> {
+    fn reset(&mut self) {
+        for mut scan in &mut self.scans {
+            scan.reset();
+        }
+        self.current = 0;
+    }
+}
+
 struct BottomUp<'s> {
     all_frames: Vec<Frame<'s>>,
     index: usize
 }
 
 impl<'s> BottomUp<'s> {
-    fn new(name: String, formals: Vec<String>,
+    fn new(name: &str, formals: Vec<String>,
            base_scans: Vec<Frames<'s, 's>>, recursive_rules: Vec<Vec<ast::Term>>,
            engine: &'s storage::StorageEngine) -> Result<BottomUp<'s>> {
         let mut all_frames = HashSet::new();
@@ -245,7 +304,7 @@ impl<'s> BottomUp<'s> {
                 {
                     // Apply the given rule and see if we get any new tuples
                     let scan = plan_recursive_rule(engine,
-                                                   &name,
+                                                   name,
                                                    &rule,
                                                    &formals,
                                                    &all_frames)?;
@@ -447,7 +506,7 @@ pub fn query<'s>(engine: &'s storage::StorageEngine,
             Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
         },
         Intension(view) => {
-            let scan = IntensionalScan::from_view(engine, view)?;
+            let scan = IntensionalScan::from_view(&head, engine, view)?;
             Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
         }
     }
@@ -533,4 +592,15 @@ fn deconstruct_term(t: ast::Term) -> Result<(String, Vec<ast::AtomicTerm>)> {
         ast::Term::Atomic(a) => Ok((to_atom(a)?, Vec::new())),
         ast::Term::Compound(cterm) => Ok((cterm.relation, cterm.params))
     }
+}
+
+fn is_recursive(name: &str, rule: Vec<ast::Term>) -> Result<bool> {
+    for term in rule {
+        let (relation_name, _) = deconstruct_term(term)?;
+        if relation_name == name {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
