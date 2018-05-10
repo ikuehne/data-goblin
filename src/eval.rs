@@ -296,7 +296,7 @@ impl<'s> BottomUp<'s> {
         }
 
         // Now, repeatedly apply recursive rules.
-        let mut new_tuple = false;
+        let mut new_tuple = true;
         while new_tuple {
             new_tuple = false;
             for rule in &recursive_rules {
