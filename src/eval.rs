@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::hash_set;
 use std::collections::LinkedList;
-use std::marker::PhantomData;
 
 /// Plans are simply iterators that can be reset to the beginning.
 pub trait Plan: Iterator {
@@ -28,6 +27,8 @@ pub trait Plan: Iterator {
 /// Plans that return tuples.
 pub trait TuplePlan<'a>: Plan<Item = Tuple<'a>> {}
 impl<'a, T: Plan<Item = Tuple<'a>>> TuplePlan<'a> for T {}
+
+pub type Tuples<'s, 'a> = Box<TuplePlan<'s, Item = Tuple<'s>> + 'a>;
 
 /// A (resetable) scan over an extensional relation.
 struct ExtensionalScan<'a> {
@@ -70,37 +71,29 @@ impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
     /// the given storage engine.
     fn from_view(name: &str,
                  engine: &'s storage::StorageEngine,
-                 view: &'s storage::View) -> Result<IntensionalScan<'s, 's>> {
+                 view: &'s storage::View) -> Result<Tuples<'s, 's>> {
         let mut recursive = false;
-        let mut base_scans = Vec::new();
+        let mut base_scans: Vec<Tuples<'s, 's>> = Vec::new();
         let mut recursive_rules = Vec::new();
-        for rule in &view.definition {
+        for (params, rule) in &view.rules {
             if is_recursive(name, rule.to_vec())? {
                 recursive = true;
-                recursive_rules.push(rule.clone());
+                recursive_rules.push((params.clone(), rule.clone()));
             } else {
                 let mut joins = LinkedList::new();
                 for term in rule {
                     joins.push_back(query(engine, term.clone())?);
                 }
-                base_scans.push(plan_joins(joins));
+                let join = plan_joins(joins);
+                base_scans.push(Box::new(IntensionalScan::new(params.to_vec(),
+                                                              join)));
             }
         }
 
-        let scan: Frames<'s, 's> = if recursive {
-            Box::new(BottomUp::new(
-                    name, to_variables(view.formals.clone())?,
-                    base_scans, recursive_rules, engine)?)
-        }
-        else {
+        Ok(if recursive {
+            Box::new(BottomUp::new(name, base_scans, recursive_rules, engine)?)
+        } else {
             Box::new(Chain::new(base_scans))
-        };
-
-        let column_names = to_variables(view.formals.clone())?;
-
-        Ok(IntensionalScan {
-            column_names,
-            scan
         })
     }
 
@@ -130,6 +123,130 @@ impl<'s: 'a, 'a> Plan for IntensionalScan<'s, 'a> {
     }
 }
 
+struct BottomUp<'s> {
+    all_tuples: Vec<Tuple<'s>>,
+    index: usize
+}
+
+impl<'s> BottomUp<'s> {
+    fn new(name: &str, base_scans: Vec<Tuples<'s, 's>>,
+           recursive_rules: Vec<(Vec<String>, Vec<ast::Term>)>,
+           engine: &'s storage::StorageEngine) -> Result<BottomUp<'s>> {
+        let mut all_tuples = HashSet::new();
+
+        for scan in base_scans {
+            for tuple in scan {
+                all_tuples.insert(tuple);
+            }
+        }
+
+        // Now, repeatedly apply recursive rules.
+        let mut new_tuple = true;
+        while new_tuple {
+            new_tuple = false;
+            for (formals, rule) in &recursive_rules {
+                let mut new_tuples = Vec::new();
+                {
+                    // Apply the given rule and see if we get any new tuples
+                    let scan = plan_recursive_rule(engine,
+                                                   name,
+                                                   &rule,
+                                                   &formals,
+                                                   &all_tuples)?;
+                    for tuple in scan {
+                        if !all_tuples.contains(&tuple) {
+                            new_tuple = true;
+                            new_tuples.push(tuple);
+                        }
+                    }
+                }
+                for tuple in new_tuples {
+                    all_tuples.insert(tuple);
+                }
+            }
+        }
+
+        Ok(BottomUp { all_tuples: all_tuples.into_iter().collect(), index: 0 })
+    }
+}
+
+impl<'s> Iterator for BottomUp<'s> {
+    type Item = Tuple<'s>;
+
+    fn next(&mut self) -> Option<Tuple<'s>> {
+        let result = self.all_tuples.get(self.index);
+        self.index += 1;
+        return result.map(|t| t.clone());
+    }
+}
+
+impl<'s> Plan for BottomUp<'s> {
+    fn reset(&mut self) {
+        self.index = 0;
+    }
+}
+
+struct SetNode<'s: 'a, 'a> {
+    tuples: &'a HashSet<Tuple<'s>>,
+    iterator: hash_set::Iter<'a, Tuple<'s>>
+}
+
+impl<'s: 'a, 'a> SetNode<'s, 'a> {
+    fn new(tuples: &'a HashSet<Tuple<'s>>) -> SetNode<'s, 'a> {
+        SetNode { tuples: tuples, iterator: tuples.into_iter() }
+    }
+}
+
+impl<'s, 'a> Iterator for SetNode<'s, 'a> {
+    type Item = Tuple<'s>;
+
+    fn next(&mut self) -> Option<Tuple<'s>> {
+        self.iterator.next().map(|t| t.clone())
+    }
+}
+
+impl<'s, 'a> Plan for SetNode<'s, 'a> {
+    fn reset(&mut self) {
+        self.iterator = self.tuples.into_iter();
+    }
+}
+
+struct Chain<'s: 'a, 'a> {
+    parts: Vec<Tuples<'s, 'a>>,
+    current: usize
+}
+
+impl<'s: 'a, 'a> Chain<'s, 'a> {
+    fn new(parts: Vec<Tuples<'s, 'a>>) -> Chain<'s, 'a> {
+        Chain { parts, current: 0 }
+    }
+}
+
+impl<'s: 'a, 'a> Iterator for Chain<'s, 'a> {
+    type Item = Tuple<'s>;
+
+    fn next(&mut self) -> Option<Tuple<'s>> {
+        loop {
+            if self.current == self.parts.len() {
+                return None;
+            }
+            match self.parts[self.current].next() {
+                None => { self.current += 1; },
+                Some(t) => { return Some(t); }
+            }
+        }
+    }
+}
+
+impl<'s: 'a, 'a> Plan for Chain<'s, 'a> {
+    fn reset(&mut self) {
+        for mut scan in &mut self.parts {
+            scan.reset();
+        }
+        self.current = 0;
+    }
+}
+
 //
 // FramePlans.
 //
@@ -142,30 +259,28 @@ impl<'a, T: Plan<Item = Frame<'a>>> FramePlan<'a> for T {}
 // Just represents a trait object for a FramePlan with the given storage
 // lifetime. The additional `+ 'a` is necessary because trait objects lose
 // lifetime information.
-pub type Frames<'s: 'a, 'a> = Box<FramePlan<'s, Item = Frame<'s>> + 'a>;
+pub type Frames<'s, 'a> = Box<FramePlan<'s, Item = Frame<'s>> + 'a>;
 
 /// Takes tuples a `Scan` and matches them with the given pattern, returning the
 /// assignment of any variables in the pattern to the contents of the tuples.
-struct PatternMatch<'a, P: TuplePlan<'a>> {
+struct PatternMatch<'s: 'a, 'a> {
     pattern: Pattern,
-    child: P,
-    _marker: PhantomData<&'a ()>
+    child: Tuples<'s, 'a>,
 }
 
-impl<'a, P: TuplePlan<'a>> PatternMatch<'a, P> {
-    fn new(pattern: Pattern, child: P) -> Self {
+impl<'s: 'a, 'a> PatternMatch<'s, 'a> {
+    fn new(pattern: Pattern, child: Tuples<'s, 'a>) -> Self {
         PatternMatch {
             pattern,
             child,
-            _marker: PhantomData::default()
         }
     }
 }
 
-impl<'a, P: TuplePlan<'a>> Iterator for PatternMatch<'a, P> {
-    type Item = Frame<'a>;
+impl<'s: 'a, 'a> Iterator for PatternMatch<'s, 'a> {
+    type Item = Frame<'s>;
 
-    fn next(&mut self) -> Option<Frame<'a>> {
+    fn next(&mut self) -> Option<Frame<'s>> {
         loop {
             let t = self.child.next()?;
 
@@ -176,7 +291,7 @@ impl<'a, P: TuplePlan<'a>> Iterator for PatternMatch<'a, P> {
     }
 }
 
-impl<'a, P: TuplePlan<'a>> Plan for PatternMatch<'a, P> {
+impl<'s: 'a, 'a> Plan for PatternMatch<'s, 'a> {
     fn reset(&mut self) {
         self.child.reset();
     }
@@ -239,130 +354,6 @@ impl<'s: 'a, 'a> Plan for Join<'s, 'a> {
         self.left.reset();
         self.right.reset();
         self.current_left = None;
-    }
-}
-
-struct Chain<'s: 'a, 'a> {
-    scans: Vec<Frames<'s, 'a>>,
-    current: usize
-}
-
-impl<'s: 'a, 'a> Chain<'s, 'a> {
-    fn new(scans: Vec<Frames<'s, 'a>>) -> Chain<'s, 'a> {
-        Chain { scans, current: 0 }
-    }
-}
-
-impl<'s: 'a, 'a> Iterator for Chain<'s, 'a> {
-    type Item = Frame<'s>;
-
-    fn next(&mut self) -> Option<Frame<'s>> {
-        loop {
-            if self.current == self.scans.len() {
-                return None;
-            }
-            match self.scans[self.current].next() {
-                None => { self.current += 1; },
-                Some(frame) => { return Some(frame); }
-            }
-        }
-    }
-}
-
-impl<'s: 'a, 'a> Plan for Chain<'s, 'a> {
-    fn reset(&mut self) {
-        for mut scan in &mut self.scans {
-            scan.reset();
-        }
-        self.current = 0;
-    }
-}
-
-struct BottomUp<'s> {
-    all_frames: Vec<Frame<'s>>,
-    index: usize
-}
-
-impl<'s> BottomUp<'s> {
-    fn new(name: &str, formals: Vec<String>,
-           base_scans: Vec<Frames<'s, 's>>, recursive_rules: Vec<Vec<ast::Term>>,
-           engine: &'s storage::StorageEngine) -> Result<BottomUp<'s>> {
-        let mut all_frames = HashSet::new();
-
-        for scan in base_scans {
-            for frame in scan {
-                all_frames.insert(frame);
-            }
-        }
-
-        // Now, repeatedly apply recursive rules.
-        let mut new_tuple = true;
-        while new_tuple {
-            new_tuple = false;
-            for rule in &recursive_rules {
-                let mut new_frames = Vec::new();
-                {
-                    // Apply the given rule and see if we get any new tuples
-                    let scan = plan_recursive_rule(engine,
-                                                   name,
-                                                   &rule,
-                                                   &formals,
-                                                   &all_frames)?;
-                    for frame in scan {
-                        if !all_frames.contains(&frame) {
-                            new_tuple = true;
-                            new_frames.push(frame);
-                        }
-                    }
-                }
-                for frame in new_frames {
-                    all_frames.insert(frame);
-                }
-            }
-        }
-
-        Ok(BottomUp { all_frames: all_frames.into_iter().collect(), index: 0 })
-    }
-}
-
-impl<'s> Iterator for BottomUp<'s> {
-    type Item = Frame<'s>;
-
-    fn next(&mut self) -> Option<Frame<'s>> {
-        let result = self.all_frames.get(self.index);
-        self.index += 1;
-        return result.map(|frame| frame.clone());
-    }
-}
-
-impl<'s> Plan for BottomUp<'s> {
-    fn reset(&mut self) {
-        self.index = 0;
-    }
-}
-
-struct SetNode<'s: 'a, 'a> {
-    frames: &'a HashSet<Frame<'s>>,
-    iterator: hash_set::Iter<'a, Frame<'s>>
-}
-
-impl<'s, 'a> SetNode<'s, 'a> {
-    fn new(frames: &'a HashSet<Frame<'s>>) -> SetNode<'s, 'a> {
-        SetNode { frames: frames, iterator: frames.into_iter() }
-    }
-}
-
-impl<'s, 'a> Iterator for SetNode<'s, 'a> {
-    type Item = Frame<'s>;
-
-    fn next(&mut self) -> Option<Frame<'s>> {
-        self.iterator.next().map(|frame| frame.clone())
-    }
-}
-
-impl<'s, 'a> Plan for SetNode<'s, 'a> {
-    fn reset(&mut self) {
-        self.iterator = self.frames.into_iter();
     }
 }
 
@@ -472,22 +463,20 @@ fn plan_recursive_rule<'s: 'a, 'a>(
         name: &str,
         rule: &[ast::Term],
         formals: &[String],
-        all_frames: &'a HashSet<Frame<'s>>) -> Result<Frames<'s, 'a>> {
+        all_tuples: &'a HashSet<Tuple<'s>>) -> Result<Tuples<'s, 'a>> {
     let mut joins: LinkedList<Frames<'s, 'a>> = LinkedList::new();
     for term in rule {
         let (relation_name, params) = deconstruct_term(term.clone())?;
         if relation_name == name {
-            let frames = SetNode::new(all_frames);
-            let tuples = IntensionalScan::new(formals.to_vec(), Box::new(frames));
+            let tuples = Box::new(SetNode::new(all_tuples));
             let scan = PatternMatch::new(Pattern::new(params), tuples);
             joins.push_back(Box::new(scan));
-        }
-        else {
+        } else {
             joins.push_back(query(engine, term.clone())?);
         }
     }
 
-    Ok(plan_joins(joins))
+    Ok(Box::new(IntensionalScan::new(formals.to_vec(), plan_joins(joins))))
 }
 
 
@@ -500,16 +489,12 @@ pub fn query<'s>(engine: &'s storage::StorageEngine,
     let relation =
         engine.get_relation(head.as_str())
               .ok_or(Error::MalformedLine(format!("No relation found.")))?;
-    match relation {
-        Extension(ref table) => {
-            let scan = ExtensionalScan::new(table);
-            Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
-        },
-        Intension(view) => {
-            let scan = IntensionalScan::from_view(&head, engine, view)?;
-            Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
-        }
-    }
+    let scan = match relation {
+        Extension(ref table) => Box::new(ExtensionalScan::new(table)),
+        Intension(view) => IntensionalScan::from_view(&head, engine, view)?
+    };
+
+    Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
 }
 
 //
@@ -532,13 +517,14 @@ fn simple_assert(engine: &mut storage::StorageEngine,
 fn add_rule_to_view(engine: &mut storage::StorageEngine,
                     rule: ast::Rule) -> Result<()> {
     let (name, definition) = deconstruct_term(rule.head)?;
+    let params = to_variables(definition)?;
     let relation = storage::Relation::Intension(
-        storage::View { formals: definition, definition: Vec::new() }
+        storage::View { rules: Vec::new() }
     );
     let mut rel_view = engine.get_or_create_relation(name.clone(), relation);
     match *rel_view {
         Extension(_) => Err(Error::NotIntensional(name)),
-        Intension(ref mut view) => Ok(view.definition.push(rule.body))
+        Intension(ref mut view) => Ok(view.rules.push((params, rule.body)))
     }
 }
 
