@@ -8,6 +8,7 @@ use storage::Tuple;
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::collections::hash_set;
 use std::collections::LinkedList;
 use std::marker::PhantomData;
 
@@ -59,18 +60,19 @@ impl<'a> Plan for ExtensionalScan<'a> {
 }
 
 /// A (resetable) scan over an intensional relation.
-struct IntensionalScan<'a> {
+struct IntensionalScan<'s: 'a, 'a> {
     column_names: Vec<String>,
-    scan: Frames<'a>
+    scan: Frames<'s, 'a>
 }
 
-impl<'a> IntensionalScan<'a> {
+impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
     /// Create a new scan based on the given view definition, running against
     /// the given storage engine.
-    fn new(engine: &'a storage::StorageEngine, view: &'a storage::View)
-            -> Result<Self> {
-        let joins = view.definition[0].clone().into_iter().collect();
-        let scan = plan_joins(engine, joins)?;
+    fn from_view(engine: &'s storage::StorageEngine, view: &'s storage::View)
+            -> Result<IntensionalScan<'s, 's>> {
+        let joins: Result<_> = view.definition[0].clone().into_iter()
+            .map(|term| query(engine, term)).collect();
+        let scan = plan_joins(joins?);
         let column_names = to_variables(view.formals.clone())?;
 
         Ok(IntensionalScan {
@@ -78,12 +80,17 @@ impl<'a> IntensionalScan<'a> {
             scan
         })
     }
+
+    fn new(column_names: Vec<String>,
+           scan: Frames<'s, 'a>) -> IntensionalScan<'s, 'a> {
+        IntensionalScan { column_names, scan }
+    }
 }
 
-impl<'a> Iterator for IntensionalScan<'a> {
-    type Item = Tuple<'a>;
+impl<'s: 'a, 'a> Iterator for IntensionalScan<'s, 'a> {
+    type Item = Tuple<'s>;
 
-    fn next(&mut self) -> Option<Tuple<'a>> {
+    fn next(&mut self) -> Option<Tuple<'s>> {
         self.scan.next().map(|frame| {
             (&self.column_names).into_iter().map(|v| {
                 *frame.get(v).unwrap_or_else(|| {
@@ -94,7 +101,7 @@ impl<'a> Iterator for IntensionalScan<'a> {
     }
 }
 
-impl<'a> Plan for IntensionalScan<'a> {
+impl<'s: 'a, 'a> Plan for IntensionalScan<'s, 'a> {
     fn reset(&mut self) {
         self.scan.reset()
     }
@@ -112,7 +119,7 @@ impl<'a, T: Plan<Item = Frame<'a>>> FramePlan<'a> for T {}
 // Just represents a trait object for a FramePlan with the given storage
 // lifetime. The additional `+ 'a` is necessary because trait objects lose
 // lifetime information.
-pub type Frames<'a> = Box<FramePlan<'a, Item = Frame<'a>> + 'a>;
+pub type Frames<'s: 'a, 'a> = Box<FramePlan<'s, Item = Frame<'s>> + 'a>;
 
 /// Takes tuples a `Scan` and matches them with the given pattern, returning the
 /// assignment of any variables in the pattern to the contents of the tuples.
@@ -153,15 +160,15 @@ impl<'a, P: TuplePlan<'a>> Plan for PatternMatch<'a, P> {
 }
 
 /// Represents a cross join between two FramePlans.
-struct Join<'a> {
-    left: Frames<'a>,
-    right: Frames<'a>,
+struct Join<'s: 'a, 'a> {
+    left: Frames<'s, 'a>,
+    right: Frames<'s, 'a>,
     /// Where are we currently in the left scan? `None` if we haven't started.
-    current_left: Option<Frame<'a>>
+    current_left: Option<Frame<'s>>
 }
 
-impl<'a> Join<'a> {
-    fn new(left: Frames<'a>, right: Frames<'a>) -> Join<'a> {
+impl<'s: 'a, 'a> Join<'s, 'a> {
+    fn new(left: Frames<'s, 'a>, right: Frames<'s, 'a>) -> Join<'s, 'a> {
         Join {
             left,
             right,
@@ -170,10 +177,10 @@ impl<'a> Join<'a> {
     }
 }
 
-impl<'a> Iterator for Join<'a> {
-    type Item = Frame<'a>;
+impl<'s: 'a, 'a> Iterator for Join<'s, 'a> {
+    type Item = Frame<'s>;
 
-    fn next(&mut self) -> Option<Frame<'a>> {
+    fn next(&mut self) -> Option<Frame<'s>> {
         loop {
             match self.right.next() {
                 None => {
@@ -204,7 +211,7 @@ impl<'a> Iterator for Join<'a> {
     }
 }
 
-impl<'a> Plan for Join<'a> {
+impl<'s: 'a, 'a> Plan for Join<'s, 'a> {
     fn reset(&mut self) {
         self.left.reset();
         self.right.reset();
@@ -212,15 +219,15 @@ impl<'a> Plan for Join<'a> {
     }
 }
 
-struct BottomUp<'a> {
-    all_frames: Vec<Frame<'a>>,
+struct BottomUp<'s> {
+    all_frames: Vec<Frame<'s>>,
     index: usize
 }
 
-impl<'a> BottomUp<'a> {
+impl<'s> BottomUp<'s> {
     fn new(name: String, formals: Vec<String>,
-           base_scans: Vec<Frames<'a>>, recursive_rules: Vec<Vec<ast::Term>>,
-           engine: &'a storage::StorageEngine) -> Result<BottomUp<'a>> {
+           base_scans: Vec<Frames<'s, 's>>, recursive_rules: Vec<Vec<ast::Term>>,
+           engine: &'s storage::StorageEngine) -> Result<BottomUp<'s>> {
         let mut all_frames = HashSet::new();
 
         for scan in base_scans {
@@ -234,17 +241,19 @@ impl<'a> BottomUp<'a> {
         while new_tuple {
             new_tuple = false;
             for rule in &recursive_rules {
-                // Apply the given rule and see if we get any new tuples
-                let scan = plan_recursive_rule(engine,
-                                               &name,
-                                               &rule,
-                                               &formals,
-                                               &all_frames)?;
                 let mut new_frames = Vec::new();
-                for frame in scan {
-                    if !all_frames.contains(&frame) {
-                        new_tuple = true;
-                        new_frames.push(frame);
+                {
+                    // Apply the given rule and see if we get any new tuples
+                    let scan = plan_recursive_rule(engine,
+                                                   &name,
+                                                   &rule,
+                                                   &formals,
+                                                   &all_frames)?;
+                    for frame in scan {
+                        if !all_frames.contains(&frame) {
+                            new_tuple = true;
+                            new_frames.push(frame);
+                        }
                     }
                 }
                 for frame in new_frames {
@@ -257,19 +266,44 @@ impl<'a> BottomUp<'a> {
     }
 }
 
-impl<'a> Iterator for BottomUp<'a> {
-    type Item = Frame<'a>;
+impl<'s> Iterator for BottomUp<'s> {
+    type Item = Frame<'s>;
 
-    fn next(&mut self) -> Option<Frame<'a>> {
+    fn next(&mut self) -> Option<Frame<'s>> {
         let result = self.all_frames.get(self.index);
         self.index += 1;
         return result.map(|frame| frame.clone());
     }
 }
 
-impl<'a> Plan for BottomUp<'a> {
+impl<'s> Plan for BottomUp<'s> {
     fn reset(&mut self) {
         self.index = 0;
+    }
+}
+
+struct SetNode<'s: 'a, 'a> {
+    frames: &'a HashSet<Frame<'s>>,
+    iterator: hash_set::Iter<'a, Frame<'s>>
+}
+
+impl<'s, 'a> SetNode<'s, 'a> {
+    fn new(frames: &'a HashSet<Frame<'s>>) -> SetNode<'s, 'a> {
+        SetNode { frames: frames, iterator: frames.into_iter() }
+    }
+}
+
+impl<'s, 'a> Iterator for SetNode<'s, 'a> {
+    type Item = Frame<'s>;
+
+    fn next(&mut self) -> Option<Frame<'s>> {
+        self.iterator.next().map(|frame| frame.clone())
+    }
+}
+
+impl<'s, 'a> Plan for SetNode<'s, 'a> {
+    fn reset(&mut self) {
+        self.iterator = self.frames.into_iter();
     }
 }
 
@@ -358,37 +392,50 @@ fn merge_frames<'a>(f1: &Frame<'a>, f2: &Frame<'a>) -> Option<Frame<'a>> {
 //
 
 /// Plan a cross join over arbitrarily many terms.
-fn plan_joins<'a>(engine: &'a storage::StorageEngine,
-                  mut joins: LinkedList<ast::Term>) -> Result<Frames<'a>> {
+fn plan_joins<'s: 'a, 'a>(
+        mut joins: LinkedList<Frames<'s, 'a>>) -> Frames<'s, 'a> {
     let head = joins.pop_front();
     match head {
-        None => Err(Error::MalformedLine("Empty Join list".to_string())),
+        None => panic!("Empty Join list"),
         Some(term) => {
-            let head_term: Frames<'a> = query(engine, term)?;
             if joins.len() == 0 {
-                Ok(head_term)
+                term
             } else {
-                let rest_term: Frames<'a> = plan_joins(engine, joins)?;
-                Ok(Box::new(Join::new(head_term, rest_term)))
+                let rest: Frames<'s, 'a> = plan_joins(joins);
+                Box::new(Join::new(term, rest))
             }
         }
     }
 }
 
-fn plan_recursive_rule<'b>(
-        engine: &'b storage::StorageEngine,
+fn plan_recursive_rule<'s: 'a, 'a>(
+        engine: &'s storage::StorageEngine,
         name: &str,
         rule: &[ast::Term],
         formals: &[String],
-        all_frames: &HashSet<Frame>) -> Result<Frames<'b>> {
-    panic!("undefined")
+        all_frames: &'a HashSet<Frame<'s>>) -> Result<Frames<'s, 'a>> {
+    let mut joins: LinkedList<Frames<'s, 'a>> = LinkedList::new();
+    for term in rule {
+        let (relation_name, params) = deconstruct_term(term.clone())?;
+        if relation_name == name {
+            let frames = SetNode::new(all_frames);
+            let tuples = IntensionalScan::new(formals.to_vec(), Box::new(frames));
+            let scan = PatternMatch::new(Pattern::new(params), tuples);
+            joins.push_back(Box::new(scan));
+        }
+        else {
+            joins.push_back(query(engine, term.clone())?);
+        }
+    }
+
+    Ok(plan_joins(joins))
 }
 
 
 /// Given a query, return all variable assignments over the database that
 /// satisfy that query.
-pub fn query<'a>(engine: &'a storage::StorageEngine,
-                 query: ast::Term) -> Result<Frames<'a>> {
+pub fn query<'s>(engine: &'s storage::StorageEngine,
+                 query: ast::Term) -> Result<Frames<'s, 's>> {
     let (head, rest) = deconstruct_term(query)?;
 
     let relation =
@@ -400,7 +447,7 @@ pub fn query<'a>(engine: &'a storage::StorageEngine,
             Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
         },
         Intension(view) => {
-            let scan = IntensionalScan::new(engine, view)?;
+            let scan = IntensionalScan::from_view(engine, view)?;
             Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
         }
     }
