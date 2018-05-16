@@ -13,6 +13,7 @@ pub mod parser;
 pub mod tok;
 pub mod storage;
 
+extern crate colored;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde;

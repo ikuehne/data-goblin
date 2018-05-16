@@ -6,6 +6,9 @@ use lexer::Lexer;
 use storage;
 use parser::Parser;
 
+use colored;
+use colored::Colorize;
+
 use std;
 use std::fmt::Display;
 use std::io;
@@ -50,15 +53,17 @@ impl Driver {
     }
 
     pub fn run(self) {
-        print!("{}", PROMPT);
+        print!("{}", PROMPT.bright_blue());
         stdout().flush().unwrap();
         for line in self.lines {
             Self::handle_line(self.storage.clone(), self.mode, line)
-                .unwrap_or_else(|e| eprintln!("Error: {}", e));
+                .unwrap_or_else(|e| {
+                    eprintln!("{} {}", "Error:".bright_red(), e)
+                });
             match self.mode {
                 DriverMode::Quiet => continue,
                 DriverMode::Interactive => {
-                    print!("{}", PROMPT);
+                    print!("{}", PROMPT.bright_blue());
                     stdout().flush().unwrap();
                 }
             }
@@ -116,8 +121,25 @@ impl Driver {
                     DriverMode::Quiet => (),
                     DriverMode::Interactive => {
                         let engine = &storage.read().unwrap();
-                        for tuple in eval::query(engine, t)? {
-                            println!("{:?}", tuple);
+                        for frame in eval::query(engine, t)? {
+                            let l = frame.len();
+                            for (i, (var, val)) in frame.iter().enumerate() {
+                                print!("{}{:} {}", var.bright_black(),
+                                                   ":".bright_black(),
+                                                   val);
+                                stdout().flush();
+                                if i != l - 1 {
+                                    println!("");
+                                }
+                            }
+
+                            let mut buf = String::new();
+                            io::stdin().read_line(&mut buf);
+                            println!("");
+                            match buf.as_str() {
+                                ";\n" => continue,
+                                _ => break
+                            }
                         }
                     }
                 }
