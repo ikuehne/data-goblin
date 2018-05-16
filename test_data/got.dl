@@ -1,0 +1,155 @@
+parent(jon, robin).
+parent(lysa, robin).
+
+parent(hoster, lysa).
+parent(hoster, edmure).
+parent(hoster, catelyn).
+
+parent(rickard, ned).
+parent(rickard, other_brandon).
+parent(rickard, benjen).
+parent(rickard, lyanna).
+parent(lyarra, ned).
+parent(lyarra, other_brandon).
+parent(lyarra, benjen).
+parent(lyarra, lyanna).
+
+parent(lyanna, jon_snow).
+
+parent(catelyn, robb).
+parent(catelyn, sansa).
+parent(catelyn, arya).
+parent(catelyn, brandon).
+parent(catelyn, rickon).
+
+parent(ned, robb).
+parent(ned, sansa).
+parent(ned, arya).
+parent(ned, brandon).
+parent(ned, rickon).
+
+parent(maekar, aemon).
+parent(maekar, aegon).
+parent(dyanna, aemon).
+parent(dyanna, aegon).
+parent(aegon, jaehaerys).
+parent(aegon, rhaella).
+parent(aegon, rhaelle).
+parent(jaehaerys, aerys).
+parent(aerys, rhaegar).
+parent(aerys, viserys).
+parent(aerys, daenerys).
+parent(rhaella, rhaegar).
+parent(rhaella, viserys).
+parent(rhaella, daenerys).
+parent(rhaegar, jon_snow).
+parent(rhaelle, steffon).
+
+parent(ormond, steffon).
+parent(steffon, robert).
+parent(steffon, stannis).
+parent(steffon, renly).
+parent(robert, joffrey).
+parent(robert, myrcella).
+parent(robert, tommen).
+parent(stannis, shireen).
+
+parent(tywin, jaime).
+parent(tywin, cersei).
+parent(tywin, tyrion).
+parent(joanna, jaime).
+parent(joanna, cersei).
+parent(joanna, tyrion).
+parent(cersei, joffrey).
+parent(cersei, myrcella).
+parent(cersei, tommen).
+
+parent(luthor, mace).
+parent(olenna, mace).
+parent(mace, margaery).
+parent(mace, loras).
+
+female(lysa).
+female(catelyn).
+female(lyarra).
+female(sansa).
+female(arya).
+female(lyanna).
+female(daenerys).
+female(rhaella).
+female(rhaelle).
+female(shireen).
+female(joanna).
+female(cersei).
+female(myrcella).
+female(olenna).
+female(margaery).
+
+male(jon).
+male(robin).
+male(hoster).
+male(edmure).
+male(rickard).
+male(brandon).
+male(eddard).
+male(benjen).
+male(robb).
+male(other_brandon).
+male(eddard).
+male(benjen).
+male(robb).
+male(brandon).
+male(rickon).
+male(maekar).
+male(aemon).
+male(aegon).
+male(jaehaerys).
+male(aerys).
+male(rhaegar).
+male(viserys).
+male(jon_snow).
+male(ormund).
+male(steffon).
+male(robert).
+male(stannis).
+male(renly).
+male(tywin).
+male(jaime).
+male(tyrion).
+male(joffrey).
+male(tommen).
+male(luthor).
+male(mace).
+male(loras).
+
+house_concrete(jon, arryn).
+house_concrete(hoster, tully).
+house_concrete(rickard, stark).
+house_concrete(lyarra, stark).
+house_concrete(maekar, targaryen).
+house_concrete(ormond, baratheon).
+house_concrete(tywin, lannister).
+house_concrete(luthor, tyrell).
+house_concrete(dyanna, dayne).
+
+house(PERSON, HOUSE) :- house_concrete(PERSON, HOUSE).
+house(PERSON, HOUSE) :- parent(PARENT, PERSON),
+                        male(PARENT),
+                        house(PARENT, HOUSE).
+
+ancestor(A, B) :- parent(A, B).
+ancestor(A, B) :- parent(C, B), ancestor(A, C).
+
+relative(A, B) :- parent(A, B).
+relative(A, B) :- parent(B, A).
+relative(A, B) :- relative(A, C), relative(C, B).
+
+sibling(A, B) :- parent(PARENT, A), parent(PARENT, B).
+cousin(A, B) :- parent(PARENT_A, A), sibling(PARENT_A, PARENT_B), parent(PARENT_B, B).
+aunt(A, B) :- parent(B, PARENT), sibling(PARENT, A), female(A).
+uncle(A, B) :- parent(B, PARENT), sibling(PARENT, A), male(A).
+grandparent(A, B) :- parent(A, C), parent(C, B).
+mother(A, B) :- parent(A, B), female(A).
+father(A, B) :- parent(A, B), male(A).
+grandmother(A, B) :- grandparent(A, B), female(A).
+grandfather(A, B) :- grandparent(A, B), male(A).
