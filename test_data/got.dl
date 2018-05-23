@@ -4,6 +4,9 @@ parent(lysa, robin).
 parent(hoster, lysa).
 parent(hoster, edmure).
 parent(hoster, catelyn).
+parent(minisa, lysa).
+parent(minisa, edmure).
+parent(minisa, catelyn).
 
 parent(rickard, ned).
 parent(rickard, other_brandon).
@@ -45,21 +48,31 @@ parent(rhaella, daenerys).
 parent(rhaegar, jon_snow).
 parent(rhaelle, steffon).
 
-parent(ormond, steffon).
+parent(ormund, steffon).
 parent(steffon, robert).
 parent(steffon, stannis).
 parent(steffon, renly).
-parent(robert, joffrey).
-parent(robert, myrcella).
-parent(robert, tommen).
 parent(stannis, shireen).
 
+parent(tytos, tywin).
+parent(jeyne, tywin).
+parent(tytos, kevan).
+parent(jeyne, kevan).
 parent(tywin, jaime).
 parent(tywin, cersei).
 parent(tywin, tyrion).
 parent(joanna, jaime).
 parent(joanna, cersei).
 parent(joanna, tyrion).
+parent(kevan, lancel).
+parent(kevan, martyn).
+parent(kevan, willem).
+parent(dorna, lancel).
+parent(dorna, martyn).
+parent(dorna, willem).
+parent(jaime, joffrey).
+parent(jaime, myrcella).
+parent(jaime, tommen).
 parent(cersei, joffrey).
 parent(cersei, myrcella).
 parent(cersei, tommen).
@@ -69,6 +82,29 @@ parent(olenna, mace).
 parent(mace, margaery).
 parent(mace, loras).
 
+parent(quellon, balon).
+parent(quellon, aeron).
+parent(quellon, euron).
+parent(balon, rodrik).
+parent(balon, maron).
+parent(balon, asha).
+parent(balon, theon).
+parent(alannys, rodrik).
+parent(alannys, maron).
+parent(alannys, asha).
+parent(alannys, theon).
+
+parent(doran, trystane).
+parent(oberyn, obara).
+parent(oberyn, nymeria).
+parent(oberyn, tyene).
+parent(oberyn, sarella).
+parent(oberyn, elia).
+parent(oberyn, obella).
+parent(oberyn, dorea).
+parent(oberyn, loreza).
+
+female(minisa).
 female(lysa).
 female(catelyn).
 female(lyarra).
@@ -79,12 +115,29 @@ female(daenerys).
 female(rhaella).
 female(rhaelle).
 female(shireen).
+female(jeyne).
 female(joanna).
+female(dorna).
 female(cersei).
 female(myrcella).
 female(olenna).
 female(margaery).
+female(alannys).
+female(asha).
+female(obara).
+female(nymeria).
+female(tyene).
+female(sarella).
+female(elia).
+female(obella).
+female(dorea).
+female(loreza).
 
+male(tytos).
+male(kevan).
+male(lancel).
+male(martyn).
+male(willem).
 male(jon).
 male(robin).
 male(hoster).
@@ -121,16 +174,32 @@ male(tommen).
 male(luthor).
 male(mace).
 male(loras).
+male(quellon).
+male(balon).
+male(aeron).
+male(euron).
+male(rodrik).
+male(maron).
+male(theon).
+male(doran).
+male(trystane).
+male(oberyn).
 
 house_concrete(jon, arryn).
 house_concrete(hoster, tully).
 house_concrete(rickard, stark).
 house_concrete(lyarra, stark).
 house_concrete(maekar, targaryen).
-house_concrete(ormond, baratheon).
-house_concrete(tywin, lannister).
+house_concrete(ormund, baratheon).
+house_concrete(joanna, lannister).
+house_concrete(tytos, lannister).
 house_concrete(luthor, tyrell).
+house_concrete(quellon, greyjoy).
+house_concrete(doran, martell).
+house_concrete(oberyn, martell).
 house_concrete(dyanna, dayne).
+house_concrete(minisa, whent).
+house_concrete(alannys, harlaw).
 
 house(PERSON, HOUSE) :- house_concrete(PERSON, HOUSE).
 house(PERSON, HOUSE) :- parent(PARENT, PERSON),
@@ -153,3 +222,4 @@ mother(A, B) :- parent(A, B), female(A).
 father(A, B) :- parent(A, B), male(A).
 grandmother(A, B) :- grandparent(A, B), female(A).
 grandfather(A, B) :- grandparent(A, B), male(A).
+sand_snake(A) :- parent(oberyn, A).

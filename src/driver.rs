@@ -6,7 +6,6 @@ use lexer::Lexer;
 use storage;
 use parser::Parser;
 
-use colored;
 use colored::Colorize;
 
 use std;
@@ -41,7 +40,7 @@ static PROMPT: &'static str = "data-goblin> ";
 
 pub struct Driver {
     lines: Box<Iterator<Item = ast::Line>>,
-    storage: Arc<RwLock<storage::StorageEngine>>,
+    storage: Arc<RwLock<storage::StorageEngine<eval::AstView>>>,
     writer: std::thread::JoinHandle<()>,
     done: Arc<AtomicBool>,
     mode: DriverMode
@@ -72,9 +71,11 @@ impl Driver {
         self.done.store(true, Ordering::Relaxed);
 
         self.writer.join().unwrap();
+
+        self.storage.write().unwrap().write_back();
     }
 
-    fn make_writer(engine: Arc<RwLock<storage::StorageEngine>>,
+    fn make_writer(engine: Arc<RwLock<storage::StorageEngine<eval::AstView>>>,
                    done: Arc<AtomicBool>)
             -> std::thread::JoinHandle<()> {
         std::thread::spawn(move || {
@@ -112,7 +113,7 @@ impl Driver {
         Driver { lines, storage, writer, done, mode }
     }
 
-    fn handle_line(storage: Arc<RwLock<storage::StorageEngine>>,
+    fn handle_line(storage: Arc<RwLock<storage::StorageEngine<eval::AstView>>>,
                    mode: DriverMode,
                    line: ast::Line) -> Result<()> {
         Ok(match line {
@@ -127,14 +128,14 @@ impl Driver {
                                 print!("{}{:} {}", var.bright_black(),
                                                    ":".bright_black(),
                                                    val);
-                                stdout().flush();
+                                unwrap_or_abort(stdout().flush());
                                 if i != l - 1 {
                                     println!("");
                                 }
                             }
 
                             let mut buf = String::new();
-                            io::stdin().read_line(&mut buf);
+                            unwrap_or_abort(io::stdin().read_line(&mut buf));
                             println!("");
                             match buf.as_str() {
                                 ";\n" => continue,

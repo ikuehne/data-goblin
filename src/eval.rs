@@ -21,6 +21,18 @@ pub trait Plan: Iterator {
 }
 
 //
+// Views.
+//
+
+/// An `AstView` represents a view simply as the AST of each of its rules.
+#[derive(Serialize, Deserialize)]
+pub struct AstView {
+    pub rules: Vec<(Vec<String>, Vec<ast::Term>)>
+}
+
+type Storage = storage::StorageEngine<AstView>;
+
+//
 // TuplePlans.
 //
 
@@ -70,8 +82,8 @@ impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
     /// Create a new scan based on the given view definition, running against
     /// the given storage engine.
     fn from_view(name: &str,
-                 engine: &'s storage::StorageEngine,
-                 view: &'s storage::View) -> Result<Tuples<'s, 's>> {
+                 engine: &'s Storage,
+                 view: &'s AstView) -> Result<Tuples<'s, 's>> {
         let mut recursive = false;
         let mut base_scans: Vec<Tuples<'s, 's>> = Vec::new();
         let mut recursive_rules = Vec::new();
@@ -131,7 +143,7 @@ struct BottomUp<'s> {
 impl<'s> BottomUp<'s> {
     fn new(name: &str, base_scans: Vec<Tuples<'s, 's>>,
            recursive_rules: Vec<(Vec<String>, Vec<ast::Term>)>,
-           engine: &'s storage::StorageEngine) -> Result<BottomUp<'s>> {
+           engine: &'s Storage) -> Result<BottomUp<'s>> {
         let mut all_tuples = HashSet::new();
 
         for scan in base_scans {
@@ -459,7 +471,7 @@ fn plan_joins<'s: 'a, 'a>(
 }
 
 fn plan_recursive_rule<'s: 'a, 'a>(
-        engine: &'s storage::StorageEngine,
+        engine: &'s Storage,
         name: &str,
         rule: &[ast::Term],
         formals: &[String],
@@ -482,13 +494,14 @@ fn plan_recursive_rule<'s: 'a, 'a>(
 
 /// Given a query, return all variable assignments over the database that
 /// satisfy that query.
-pub fn query<'s>(engine: &'s storage::StorageEngine,
+pub fn query<'s>(engine: &'s Storage,
                  query: ast::Term) -> Result<Frames<'s, 's>> {
     let (head, rest) = deconstruct_term(query)?;
 
     let relation =
         engine.get_relation(head.as_str())
-              .ok_or(Error::MalformedLine(format!("No relation found.")))?;
+              .ok_or(Error::MalformedLine(
+                      format!("No relation \"{}\" found.", head.as_str())))?;
     let scan = match relation {
         Extension(ref table) => Box::new(ExtensionalScan::new(table)),
         Intension(view) => IntensionalScan::from_view(&head, engine, view)?
@@ -502,7 +515,7 @@ pub fn query<'s>(engine: &'s storage::StorageEngine,
 //
 
 /// Add a simple fact (one with no variables) to the database.
-fn simple_assert(engine: &mut storage::StorageEngine,
+fn simple_assert(engine: &mut Storage,
                  fact: ast::Term) -> Result<()> {
     let (head, rest) = deconstruct_term(fact)?;
     let tuple = to_atoms(rest)?;
@@ -514,12 +527,12 @@ fn simple_assert(engine: &mut storage::StorageEngine,
     }
 }
 
-fn add_rule_to_view(engine: &mut storage::StorageEngine,
+fn add_rule_to_view(engine: &mut Storage,
                     rule: ast::Rule) -> Result<()> {
     let (name, definition) = deconstruct_term(rule.head)?;
     let params = to_variables(definition)?;
     let relation = storage::Relation::Intension(
-        storage::View { rules: Vec::new() }
+        AstView { rules: Vec::new() }
     );
     let mut rel_view = engine.get_or_create_relation(name.clone(), relation);
     match *rel_view {
@@ -529,8 +542,7 @@ fn add_rule_to_view(engine: &mut storage::StorageEngine,
 }
 
 /// Add a fact or rule to the database.
-pub fn assert(engine: &mut storage::StorageEngine,
-              fact: ast::Rule) -> Result<()> {
+pub fn assert(engine: &mut Storage, fact: ast::Rule) -> Result<()> {
     if fact.body.len() == 0 {
         simple_assert(engine, fact.head)
     } else {

@@ -3,10 +3,10 @@
 /// Uses the `serde_json` library for deserialization; note that all types that
 /// own durable data are `Serialize` and `Deserialize`.
 
-use ast;
 use error::*;
 use error::Error::StorageError;
 
+use serde::{Serialize, Deserialize};
 use serde_json;
 
 use std;
@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::iter::IntoIterator;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,35 +32,6 @@ pub type Tuple<'a> = Vec<&'a str>;
 pub struct Table {
     contents: Vec<String>,
     arity: usize
-}
-
-/// A `View` is an intensional relation in the database.
-#[derive(Serialize, Deserialize)]
-pub struct View {
-    pub rules: Vec<(Vec<String>, Vec<ast::Term>)>
-}
-
-/// A `Relation` is either an extensional or an intensional relation.
-#[derive(Serialize, Deserialize)]
-pub enum Relation {
-    Extension(Table),
-    Intension(View)
-}
-
-impl Relation {
-    pub fn write_back(&self, path: &str) {
-        let out =
-            io::BufWriter::new(fs::File::create(path).unwrap());
-        serde_json::to_writer(out, self).unwrap();
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct TaggedRelation {
-    contents: Relation,
-    path: String,
-    #[serde(default, skip)]
-    dirty: AtomicBool
 }
 
 impl Table {
@@ -80,28 +52,6 @@ impl Table {
         } else {
             self.contents.append(&mut fact);
             Ok(())
-        }
-    }
-}
-
-impl TaggedRelation {
-    /// Set the "dirty" flag, and return the previous dirty state.
-    fn dirty(&self) -> bool {
-        self.dirty.swap(true, Ordering::SeqCst)
-    }
-
-    /// Unset the "dirty" flag, and return the previous dirty state.
-    fn clean(&self) -> bool {
-        self.dirty.swap(false, Ordering::SeqCst)
-    }
-
-    // On dropping the `RelViewMut`, any changes are written back.
-    fn write_back(&self) {
-        if self.clean() {
-            let out =
-                io::BufWriter::new(fs::File::create(self.path.as_str())
-                                       .unwrap());
-            serde_json::to_writer(out, self).unwrap();
         }
     }
 }
@@ -145,38 +95,98 @@ impl<'i> IntoIterator for &'i Table {
     }
 }
 
+pub trait View<'de>: Serialize + Deserialize<'de> {}
+
+impl<'de, T: Serialize + Deserialize<'de>> View<'de> for T {}
+
+/// A `Relation` is either an extensional or an intensional relation.
+#[derive(Serialize, Deserialize)]
+pub enum Relation<V> {
+    Extension(Table),
+    Intension(V)
+}
+
+impl<'de, V: View<'de>> Relation<V> {
+    pub fn write_back(&self, path: &str) {
+        let out = io::BufWriter::new(fs::File::create(path).unwrap());
+        serde_json::to_writer(out, self).unwrap();
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct TaggedRelation<V> {
+    contents: Relation<V>,
+    path: String,
+    #[serde(default, skip)]
+    dirty: AtomicBool
+}
+
+impl<'de, V: View<'de>> TaggedRelation<V> {
+    /// Set the "dirty" flag, and return the previous dirty state.
+    fn dirty(&self) -> bool {
+        self.dirty.swap(true, Ordering::SeqCst)
+    }
+
+    /// Unset the "dirty" flag, and return the previous dirty state.
+    fn clean(&self) -> bool {
+        self.dirty.swap(false, Ordering::SeqCst)
+    }
+
+    // On dropping the `RelViewMut`, any changes are written back.
+    fn write_back(&self) {
+        if self.clean() {
+            let out =
+                io::BufWriter::new(fs::File::create(self.path.as_str())
+                                       .unwrap());
+            serde_json::to_writer(out, self).unwrap();
+        }
+    }
+}
+
 /// A StorageEngine manages all of the relations in a database.
 /// 
 /// In particular, it can create new relations, provide views on existing
 /// relations, and ensure that modifications to relations are durable.
-pub struct StorageEngine {
+pub struct StorageEngine<V> {
     data_dir: String,
-    relations: HashMap<String, TaggedRelation>
+    relations: HashMap<String, TaggedRelation<V>>
 }
 
 /// A mutable view on a `Relation`.
 /// 
 /// Ensures that any changes to the `Relation` are written back to disk.
-pub struct RelViewMut<'i>(&'i mut TaggedRelation);
+pub struct RelViewMut<'i, 'de, V: View<'de> + 'i> {
+    referand: &'i mut TaggedRelation<V>,
+    _phantom: PhantomData<&'de ()>
+}
 
-impl<'i> Drop for RelViewMut<'i> {
+impl<'i, 'de, V: View<'de>> RelViewMut<'i, 'de, V> {
+    fn new(referand: &'i mut TaggedRelation<V>) -> Self {
+        RelViewMut {
+            referand,
+            _phantom: PhantomData::default()
+        }
+    }
+}
+
+impl<'i, 'de, V: View<'de>> Drop for RelViewMut<'i, 'de, V> {
     // On dropping the `RelViewMut`, any changes are written back.
     fn drop(&mut self) {
-        self.0.dirty();
+        self.referand.dirty();
     }
 }
 
-impl<'i> Deref for RelViewMut<'i> {
-    type Target = Relation;
+impl<'i, 'de, V: View<'de>> Deref for RelViewMut<'i, 'de, V> {
+    type Target = Relation<V>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0.contents
+        &self.referand.contents
     }
 }
 
-impl<'i> DerefMut for RelViewMut<'i> {
+impl<'i, 'de, V: View<'de>> DerefMut for RelViewMut<'i, 'de, V> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0.contents
+        &mut self.referand.contents
     }
 }
 
@@ -185,7 +195,7 @@ fn err<E: std::error::Error + 'static>(err: E) -> Error {
     StorageError(Box::new(err))
 }
 
-impl StorageEngine {
+impl<V> StorageEngine<V> where for<'de> V: View<'de> {
     /// Create a new StorageEngine.
     /// 
     /// Tables are stored in/retrieved from `data_dir`. If that directory does
@@ -212,7 +222,7 @@ impl StorageEngine {
                     let fname = entry.path();
                     let reader = fs::File::open(fname).map_err(err)?;
                     let buffered = io::BufReader::new(reader);
-                    let table: TaggedRelation =
+                    let table: TaggedRelation<V> =
                         serde_json::from_reader(buffered).map_err(err)?;
                     let name = entry.file_name().into_string().map_err(|e|
                         Error::BadFilename(e)
@@ -236,39 +246,36 @@ impl StorageEngine {
     /// Get an immutable view on the named relation.
     /// 
     /// Returns `None` if it is not in the database.
-    pub fn get_relation(&self, name: &str) -> Option<&Relation> {
+    pub fn get_relation(&self, name: &str) -> Option<&Relation<V>> {
         self.relations.get(name).map(|r| &r.contents)
     }
 
     /// Get a mutable view on the named relation.
     /// 
     /// Returns `None` if it is not in the database. See also `RelViewMut`.
-    pub fn get_relation_mut(&mut self, name: &str) -> Option<RelViewMut> {
-        self.relations.get_mut(name).map(RelViewMut)
+    pub fn get_relation_mut(&mut self, name: &str)
+            -> Option<RelViewMut<V>> {
+        self.relations.get_mut(name).map(RelViewMut::new)
     }
 
     /// Retrieve the given relation, or create it if it doesn't exist.
     /// 
     /// Must take ownership of the table name, because it needs to be stored in
     /// the database if it is not already there. See also `RelViewMut`.
-    pub fn get_or_create_relation(&mut self, name: String, rel: Relation)
-            -> RelViewMut {
+    pub fn get_or_create_relation(
+            &mut self,
+            name: String,
+            rel: Relation<V>) -> RelViewMut<V> {
         let path = self.path_of_table_name(name.as_str());
         let tagged = TaggedRelation { contents: rel,
                                       path, dirty: AtomicBool::new(true) };
-        RelViewMut(self.relations.entry(name).or_insert(tagged))
+        RelViewMut::new(self.relations.entry(name).or_insert(tagged))
     }
 
     pub fn write_back(&self) {
         for (_, relation) in &self.relations {
             (&relation).write_back();
         }
-    }
-}
-
-impl Drop for StorageEngine {
-    fn drop(&mut self) {
-        self.write_back();
     }
 }
 
@@ -318,12 +325,12 @@ mod tests {
         }
     }
 
-    fn test_engine() -> StorageEngine {
+    fn test_engine() -> StorageEngine<()> {
         clear_test_dir();
         StorageEngine::new(TEST_DIR.to_string()).unwrap()
     }
 
-    fn cleanup(engine: StorageEngine) {
+    fn cleanup(engine: StorageEngine<()>) {
         std::mem::drop(engine);
         clear_test_dir();
     }
