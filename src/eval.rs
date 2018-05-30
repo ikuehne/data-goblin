@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::hash_set;
 use std::collections::LinkedList;
+use std::mem;
 
 /// Plans are simply iterators that can be reset to the beginning.
 pub trait Plan: Iterator {
@@ -27,7 +28,36 @@ pub trait Plan: Iterator {
 /// An `AstView` represents a view simply as the AST of each of its rules.
 #[derive(Serialize, Deserialize)]
 pub struct AstView {
-    pub rules: Vec<(Vec<String>, Vec<ast::Term>)>
+    name: String,
+    rules: Vec<(Vec<String>, Vec<ast::Term>)>,
+    dependents: HashSet<String>
+}
+
+impl AstView {
+    fn new(name: String) -> AstView {
+        AstView {
+            name,
+            rules: Vec::new(),
+            dependents: HashSet::new()
+        }
+    }
+
+    fn add_rule(&mut self,
+                engine: &mut Storage,
+                formals: Vec<String>,
+                body: Vec<ast::Term>) {
+        for term in &body {
+            if let ast::Term::Compound(cterm) = term {
+                if let Some(mut rel) = engine.get_relation_mut(&cterm.relation)
+                        {
+                    if let Intension(v) = &mut *rel {
+                        v.dependents.insert(self.name.clone());
+                    }
+                }
+            }
+        }
+        self.rules.push((formals, body));
+    }
 }
 
 type Storage = storage::StorageEngine<AstView>;
@@ -529,15 +559,19 @@ fn simple_assert(engine: &mut Storage,
 
 fn add_rule_to_view(engine: &mut Storage,
                     rule: ast::Rule) -> Result<()> {
-    let (name, definition) = deconstruct_term(rule.head)?;
-    let params = to_variables(definition)?;
-    let relation = storage::Relation::Intension(
-        AstView { rules: Vec::new() }
-    );
-    let mut rel_view = engine.get_or_create_relation(name.clone(), relation);
-    match *rel_view {
-        Extension(_) => Err(Error::NotIntensional(name)),
-        Intension(ref mut view) => Ok(view.rules.push((params, rule.body)))
+    unsafe {
+        let engine_ptr = engine as *mut Storage;
+        let engine1: &mut Storage = mem::transmute(engine_ptr);
+        let engine2: &mut Storage = mem::transmute(engine_ptr);
+        let (name, definition) = deconstruct_term(rule.head)?;
+        let params = to_variables(definition)?;
+        let relation = storage::Relation::Intension(AstView::new(name.clone()));
+        let mut rel_view = engine1.get_or_create_relation(name.clone(), relation);
+        match *rel_view {
+            Extension(_) => Err(Error::NotIntensional(name)),
+            Intension(ref mut view) =>
+                Ok(view.add_rule(engine2, params, rule.body))
+        }
     }
 }
 
