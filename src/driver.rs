@@ -1,6 +1,7 @@
 use error::*;
 
 use ast;
+use cache::ViewCache;
 use eval;
 use lexer::Lexer;
 use storage;
@@ -53,9 +54,15 @@ impl Driver {
 
     pub fn run(self) {
         print!("{}", PROMPT.bright_blue());
+
+        // TODO: Initially populate cache.
+        let mut cache = ViewCache::new();
+
+        eval::initialize_view_cache(&self.storage.read().unwrap(), &mut cache);
+
         stdout().flush().unwrap();
         for line in self.lines {
-            Self::handle_line(self.storage.clone(), self.mode, line)
+            Self::handle_line(self.storage.clone(), &mut cache, self.mode, line)
                 .unwrap_or_else(|e| {
                     eprintln!("{} {}", "Error:".bright_red(), e)
                 });
@@ -114,6 +121,7 @@ impl Driver {
     }
 
     fn handle_line(storage: Arc<RwLock<storage::StorageEngine<eval::AstView>>>,
+                   cache: &mut ViewCache,
                    mode: DriverMode,
                    line: ast::Line) -> Result<()> {
         Ok(match line {
@@ -122,7 +130,7 @@ impl Driver {
                     DriverMode::Quiet => (),
                     DriverMode::Interactive => {
                         let engine = &storage.read().unwrap();
-                        for frame in eval::query(engine, t)? {
+                        for frame in eval::query(engine, cache, t)? {
                             let l = frame.len();
                             for (i, (var, val)) in frame.iter().enumerate() {
                                 print!("{}{:} {}", var.bright_black(),
@@ -146,7 +154,7 @@ impl Driver {
                 }
             },
             ast::Line::Rule(r) => {
-                eval::assert(&mut storage.write().unwrap(), r)?
+                eval::assert(&mut storage.write().unwrap(), cache, r)?
             }
         })
     }

@@ -5,6 +5,7 @@
 #![feature(type_ascription)]
 
 pub mod ast;
+pub mod cache;
 pub mod driver;
 pub mod error;
 pub mod eval;

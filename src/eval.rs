@@ -1,6 +1,7 @@
-/// Evaluator for dead-simple queries.
+/// The evaluator.
 
 use ast;
+use cache::ViewCache;
 use error::*;
 use storage;
 use storage::Relation::*;
@@ -10,6 +11,8 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::hash_set;
 use std::collections::LinkedList;
+use std::cell::Cell;
+use std::marker::PhantomData;
 use std::mem;
 
 /// Plans are simply iterators that can be reset to the beginning.
@@ -28,34 +31,17 @@ pub trait Plan: Iterator {
 /// An `AstView` represents a view simply as the AST of each of its rules.
 #[derive(Serialize, Deserialize)]
 pub struct AstView {
-    name: String,
-    rules: Vec<(Vec<String>, Vec<ast::Term>)>,
-    dependents: HashSet<String>
+    rules: Vec<(Vec<String>, Vec<ast::Term>)>
 }
 
 impl AstView {
-    fn new(name: String) -> AstView {
+    fn new() -> AstView {
         AstView {
-            name,
-            rules: Vec::new(),
-            dependents: HashSet::new()
+            rules: Vec::new()
         }
     }
 
-    fn add_rule(&mut self,
-                engine: &mut Storage,
-                formals: Vec<String>,
-                body: Vec<ast::Term>) {
-        for term in &body {
-            if let ast::Term::Compound(cterm) = term {
-                if let Some(mut rel) = engine.get_relation_mut(&cterm.relation)
-                        {
-                    if let Intension(v) = &mut *rel {
-                        v.dependents.insert(self.name.clone());
-                    }
-                }
-            }
-        }
+    fn add_rule(&mut self, formals: Vec<String>, body: Vec<ast::Term>) {
         self.rules.push((formals, body));
     }
 }
@@ -113,6 +99,7 @@ impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
     /// the given storage engine.
     fn from_view(name: &str,
                  engine: &'s Storage,
+                 cache: &'s ViewCache,
                  view: &'s AstView) -> Result<Tuples<'s, 's>> {
         let mut recursive = false;
         let mut base_scans: Vec<Tuples<'s, 's>> = Vec::new();
@@ -124,7 +111,7 @@ impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
             } else {
                 let mut joins = LinkedList::new();
                 for term in rule {
-                    joins.push_back(query(engine, term.clone())?);
+                    joins.push_back(query(engine, cache, term.clone())?);
                 }
                 let join = plan_joins(joins);
                 base_scans.push(Box::new(IntensionalScan::new(params.to_vec(),
@@ -133,9 +120,15 @@ impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
         }
 
         Ok(if recursive {
-            Box::new(BottomUp::new(name, base_scans, recursive_rules, engine)?)
+            let bottom_up = BottomUp::new(name,
+                                          cache,
+                                          base_scans,
+                                          recursive_rules,
+                                          engine)?;
+            Box::new(CachingWrapper::new(name.to_string(), cache, bottom_up))
         } else {
-            Box::new(Chain::new(base_scans))
+            let chain = Chain::new(base_scans);
+            Box::new(CachingWrapper::new(name.to_string(), cache, chain))
         })
     }
 
@@ -171,7 +164,9 @@ struct BottomUp<'s> {
 }
 
 impl<'s> BottomUp<'s> {
-    fn new(name: &str, base_scans: Vec<Tuples<'s, 's>>,
+    fn new(name: &str,
+           cache: &'s ViewCache,
+           base_scans: Vec<Tuples<'s, 's>>,
            recursive_rules: Vec<(Vec<String>, Vec<ast::Term>)>,
            engine: &'s Storage) -> Result<BottomUp<'s>> {
         let mut all_tuples = HashSet::new();
@@ -191,6 +186,7 @@ impl<'s> BottomUp<'s> {
                 {
                     // Apply the given rule and see if we get any new tuples
                     let scan = plan_recursive_rule(engine,
+                                                   cache,
                                                    name,
                                                    &rule,
                                                    &formals,
@@ -286,6 +282,90 @@ impl<'s: 'a, 'a> Plan for Chain<'s, 'a> {
             scan.reset();
         }
         self.current = 0;
+    }
+}
+
+struct CachingWrapper<'s, P> {
+    name: String,
+    cache: &'s ViewCache,
+    child: P
+}
+
+impl<'s, P> CachingWrapper<'s, P> {
+    fn new(name: String, cache: &'s ViewCache, child: P)
+            -> CachingWrapper<'s, P> {
+        CachingWrapper {
+            name,
+            cache,
+            child
+        }
+    }
+}
+
+impl<'s, 'a, P: Iterator<Item = Tuple<'a>>> Iterator for CachingWrapper<'s, P> {
+    type Item = Tuple<'a>;
+
+    fn next(&mut self) -> Option<Tuple<'a>> {
+        let result = self.child.next();
+
+        if let Some(ref t) = &result {
+            let owned_tuple = (&t).into_iter()
+                                  .map(|s| s.to_string())
+                                  .collect();
+            self.cache.add_tuple(self.name.clone(), owned_tuple);
+        }
+
+        result
+    }
+}
+
+impl<'s, 'a, P: Plan<Item = Tuple<'a>>> Plan for CachingWrapper<'s, P> {
+    fn reset(&mut self) {
+        self.child.reset();
+    }
+}
+
+struct VecPlan<'a> {
+    contents: Vec<Vec<String>>,
+    index: Cell<usize>,
+    phantom: PhantomData<&'a ()>
+}
+
+impl<'a> VecPlan<'a> {
+    fn new(contents: Vec<Vec<String>>) -> Self {
+        VecPlan {
+            contents,
+            index: Cell::new(0),
+            phantom: PhantomData::default()
+        }
+    }
+}
+
+impl<'a> Iterator for VecPlan<'a> {
+    type Item = Tuple<'a>;
+
+    fn next(&mut self) -> Option<Tuple<'a>> {
+        if self.index.get() >= self.contents.len() {
+            return None;
+        }
+
+        let mut result = Vec::new();
+
+        for atom in &self.contents[self.index.get()] {
+            unsafe {
+                result.push(mem::transmute(atom.as_str()))
+            }
+        }
+
+        self.index.set(self.index.get() + 1);
+
+        Some(result)
+    }
+}
+
+impl<'a> Plan for VecPlan<'a> {
+    fn reset(&mut self) {
+        self.index.set(0);
     }
 }
 
@@ -502,6 +582,7 @@ fn plan_joins<'s: 'a, 'a>(
 
 fn plan_recursive_rule<'s: 'a, 'a>(
         engine: &'s Storage,
+        cache: &'s ViewCache,
         name: &str,
         rule: &[ast::Term],
         formals: &[String],
@@ -514,28 +595,36 @@ fn plan_recursive_rule<'s: 'a, 'a>(
             let scan = PatternMatch::new(Pattern::new(params), tuples);
             joins.push_back(Box::new(scan));
         } else {
-            joins.push_back(query(engine, term.clone())?);
+            joins.push_back(query(engine, cache, term.clone())?);
         }
     }
 
     Ok(Box::new(IntensionalScan::new(formals.to_vec(), plan_joins(joins))))
 }
 
-
 /// Given a query, return all variable assignments over the database that
 /// satisfy that query.
 pub fn query<'s>(engine: &'s Storage,
+                 cache: &'s ViewCache,
                  query: ast::Term) -> Result<Frames<'s, 's>> {
     let (head, rest) = deconstruct_term(query)?;
 
-    let relation =
-        engine.get_relation(head.as_str())
-              .ok_or(Error::MalformedLine(
-                      format!("No relation \"{}\" found.", head.as_str())))?;
-    let scan = match relation {
-        Extension(ref table) => Box::new(ExtensionalScan::new(table)),
-        Intension(view) => IntensionalScan::from_view(&head, engine, view)?
+    let scan = if let Some(cached) = cache.read_cache(&head) {
+        Box::new(VecPlan::new(cached))
+    } else {
+        let relation =
+            engine.get_relation(head.as_str())
+                  .ok_or(Error::MalformedLine(
+                          format!("No relation \"{}\" found.", head.as_str())))?;
+        match relation {
+            Extension(ref table) => Box::new(ExtensionalScan::new(table)),
+            Intension(view) => IntensionalScan::from_view(&head,
+                                                          engine,
+                                                          cache,
+                                                          view)?
+        }
     };
+
 
     Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
 }
@@ -546,41 +635,70 @@ pub fn query<'s>(engine: &'s Storage,
 
 /// Add a simple fact (one with no variables) to the database.
 fn simple_assert(engine: &mut Storage,
+                 cache: &mut ViewCache,
                  fact: ast::Term) -> Result<()> {
     let (head, rest) = deconstruct_term(fact)?;
     let tuple = to_atoms(rest)?;
     let arity = tuple.len();
     let relation = storage::Relation::Extension(storage::Table::new(arity));
+
     match *engine.get_or_create_relation(head.clone(), relation) {
         Extension(ref mut t) => t.assert(tuple),
-        Intension(_) => Err(Error::NotExtensional(head))
-    }
+        Intension(_) => Err(Error::NotExtensional(head.clone()))
+    }?;
+
+    Ok(cache.invalidate(&head))
 }
 
 fn add_rule_to_view(engine: &mut Storage,
+                    cache: &mut ViewCache,
                     rule: ast::Rule) -> Result<()> {
-    unsafe {
-        let engine_ptr = engine as *mut Storage;
-        let engine1: &mut Storage = mem::transmute(engine_ptr);
-        let engine2: &mut Storage = mem::transmute(engine_ptr);
-        let (name, definition) = deconstruct_term(rule.head)?;
-        let params = to_variables(definition)?;
-        let relation = storage::Relation::Intension(AstView::new(name.clone()));
-        let mut rel_view = engine1.get_or_create_relation(name.clone(), relation);
-        match *rel_view {
-            Extension(_) => Err(Error::NotIntensional(name)),
-            Intension(ref mut view) =>
-                Ok(view.add_rule(engine2, params, rule.body))
+    let (name, definition) = deconstruct_term(rule.head)?;
+    let params = to_variables(definition)?;
+    let relation = storage::Relation::Intension(AstView::new());
+    let mut rel_view = engine.get_or_create_relation(name.clone(), relation);
+
+    cache.invalidate(&name);
+
+    for term in &rule.body {
+        if let ast::Term::Compound(cterm) = term {
+            cache.add_dependency(cterm.relation.clone(), name.clone());
         }
+    }
+
+    match *rel_view {
+        Extension(_) => Err(Error::NotIntensional(name.clone())),
+        Intension(ref mut view) => Ok(view.add_rule(params, rule.body))
     }
 }
 
 /// Add a fact or rule to the database.
-pub fn assert(engine: &mut Storage, fact: ast::Rule) -> Result<()> {
+pub fn assert(engine: &mut Storage,
+              cache: &mut ViewCache,
+              fact: ast::Rule) -> Result<()> {
     if fact.body.len() == 0 {
-        simple_assert(engine, fact.head)
+        simple_assert(engine, cache, fact.head)
     } else {
-        add_rule_to_view(engine, fact)
+        add_rule_to_view(engine, cache, fact)
+    }
+}
+
+//
+// The view cache.
+//
+
+pub fn initialize_view_cache(storage: &Storage, cache: &mut ViewCache) {
+    for relation in storage.get_relations() {
+        if let Some(Intension(view)) = storage.get_relation(relation) {
+            for (_, body) in &view.rules {
+                for term in body {
+                    if let ast::Term::Compound(cterm) = term {
+                        cache.add_dependency(cterm.relation.clone(),
+                                             relation.to_string());
+                    }
+                }
+            }
+        }
     }
 }
 

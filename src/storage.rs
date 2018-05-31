@@ -277,6 +277,14 @@ impl<V> StorageEngine<V> where for<'de> V: View<'de> {
             (&relation).write_back();
         }
     }
+
+    pub fn get_relations<'a>(&'a self) -> Vec<&'a str> {
+        let mut result = Vec::new();
+        for (k, _) in self.relations.iter() {
+            result.push(k.as_str());
+        }
+        result
+    }
 }
 
 #[cfg(test)]
