@@ -100,7 +100,8 @@ impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
     fn from_view(name: &str,
                  engine: &'s Storage,
                  cache: &'s ViewCache,
-                 view: &'s AstView) -> Result<Tuples<'s, 's>> {
+                 view: &'s AstView,
+                 semi_naive: bool) -> Result<Tuples<'s, 's>> {
         let mut recursive = false;
         let mut base_scans: Vec<Tuples<'s, 's>> = Vec::new();
         let mut recursive_rules = Vec::new();
@@ -120,12 +121,21 @@ impl<'s: 'a, 'a> IntensionalScan<'s, 'a> {
         }
 
         Ok(if recursive {
-            let bottom_up = BottomUp::new(name,
+            if semi_naive {
+                let semi_naive = SemiNaive::new(name,
                                           cache,
                                           base_scans,
                                           recursive_rules,
                                           engine)?;
-            Box::new(CachingWrapper::new(name.to_string(), cache, bottom_up))
+                Box::new(CachingWrapper::new(name.to_string(), cache, semi_naive))
+            } else {
+                let bottom_up = BottomUp::new(name,
+                                          cache,
+                                          base_scans,
+                                          recursive_rules,
+                                          engine)?;
+                Box::new(CachingWrapper::new(name.to_string(), cache, bottom_up))
+            }
         } else {
             let chain = Chain::new(base_scans);
             Box::new(CachingWrapper::new(name.to_string(), cache, chain))
@@ -204,6 +214,7 @@ impl<'s> BottomUp<'s> {
             }
         }
 
+        println!("tuples: {}", all_tuples.len());
         Ok(BottomUp { all_tuples: all_tuples.into_iter().collect(), index: 0 })
     }
 }
@@ -219,6 +230,84 @@ impl<'s> Iterator for BottomUp<'s> {
 }
 
 impl<'s> Plan for BottomUp<'s> {
+    fn reset(&mut self) {
+        self.index = 0;
+    }
+}
+
+struct SemiNaive<'s> {
+    all_tuples: Vec<Tuple<'s>>,
+    index: usize
+}
+
+impl<'s> SemiNaive<'s> {
+    fn new(name: &str,
+           cache: &'s ViewCache,
+           base_scans: Vec<Tuples<'s, 's>>,
+           recursive_rules: Vec<(Vec<String>, Vec<ast::Term>)>,
+           engine: &'s Storage) -> Result<SemiNaive<'s>> {
+        let mut all_tuples = HashSet::new();
+
+        let mut last_tuples = HashSet::new();
+        let mut new_tuples = HashSet::new();
+        println!("base scans: {}", base_scans.len());
+        for scan in base_scans {
+            for tuple in scan {
+                last_tuples.insert(tuple);
+            }
+        }
+        println!("recursive rules: {}", recursive_rules.len());
+
+        // Now, repeatedly apply recursive rules.
+        while !last_tuples.is_empty() {
+            assert!(new_tuples.is_empty());
+            for (formals, rule) in &recursive_rules {
+                {
+                    // Apply the given rule and see if we get any new tuples
+                    let scan = plan_recursive_rule(engine,
+                                                   cache,
+                                                   name,
+                                                   &rule,
+                                                   &formals,
+                                                   &last_tuples)?;
+                    for tuple in scan {
+                        if (!all_tuples.contains(&tuple))
+                        && (!last_tuples.contains(&tuple))
+                        && (!new_tuples.contains(&tuple)) {
+                            new_tuples.insert(tuple);
+                        }
+                    }
+                }
+            }
+            for tuple in last_tuples.drain() {
+                assert!(!new_tuples.contains(&tuple));
+                all_tuples.insert(tuple);
+            }
+            assert!(last_tuples.is_empty());
+
+            for tuple in new_tuples.drain() {
+                assert!(!all_tuples.contains(&tuple));
+                last_tuples.insert(tuple);
+            }
+            assert!(new_tuples.is_empty());
+        }
+
+        println!("total tuples: {}", all_tuples.len());
+        Ok(SemiNaive { all_tuples: all_tuples.into_iter().collect(), index: 0 })
+    }
+}
+
+impl<'s> Iterator for SemiNaive<'s> {
+    type Item = Tuple<'s>;
+
+    fn next(&mut self) -> Option<Tuple<'s>> {
+        let result = self.all_tuples.get(self.index);
+        self.index += 1;
+        return result.map(|t| t.clone());
+    }
+}
+
+impl<'s> Plan for SemiNaive<'s> {
     fn reset(&mut self) {
         self.index = 0;
     }
@@ -621,7 +710,37 @@ pub fn query<'s>(engine: &'s Storage,
             Intension(view) => IntensionalScan::from_view(&head,
                                                           engine,
                                                           cache,
-                                                          view)?
+                                                          view,
+                                                          false)?
+        }
+    };
+
+
+    Ok(Box::new(PatternMatch::new(Pattern::new(rest), scan)))
+}
+
+/// Given a query, return all variable assignments over the database that
+/// satisfy that query, using a semi-naive algorithm for recursive rules if
+/// needed.
+pub fn query_semi_naive<'s>(engine: &'s Storage,
+                            cache: &'s ViewCache,
+                            query: ast::Term) -> Result<Frames<'s, 's>> {
+    let (head, rest) = deconstruct_term(query)?;
+
+    let scan = if let Some(cached) = cache.read_cache(&head) {
+        Box::new(VecPlan::new(cached))
+    } else {
+        let relation =
+            engine.get_relation(head.as_str())
+                  .ok_or(Error::MalformedLine(
+                          format!("No relation \"{}\" found.", head.as_str())))?;
+        match relation {
+            Extension(ref table) => Box::new(ExtensionalScan::new(table)),
+            Intension(view) => IntensionalScan::from_view(&head,
+                                                          engine,
+                                                          cache,
+                                                          view,
+                                                          true)?
         }
     };
 

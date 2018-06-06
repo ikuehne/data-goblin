@@ -88,7 +88,7 @@ mod tests {
         }).next().unwrap().map(|frame| {
             let employee = frame.get("EMP").unwrap();
             let manager = frame.get("MAN").unwrap();
-            format!("{} {}", employee, manager)
+            format!("{}, {}", employee, manager)
         }).collect();
 
         assert!(reports.contains("id_10001, id_NULL"));
@@ -100,21 +100,107 @@ mod tests {
         assert!(!reports.contains("id_10003, id_10007"));
     }
 
+    #[test]
+    fn test_recursive_query() {
+        let engine = StorageEngine::new("test_data/hierarchy".to_string())
+            .unwrap();
+        let cache = cache::ViewCache::new();
+        let query = "underling(UNDER, OVER)?";
+        let lexer = Lexer::new(query.chars()).map(Result::unwrap);
+        let parser = Parser::new(lexer).map(Result::unwrap);
+        let underlings_bottom_up: HashSet<String> = parser.map(|line| {
+            if let ast::Line::Query(t) = line {
+                eval::query(&engine, &cache, t).unwrap()
+            } else {
+                panic!("parsed query as assertion");
+            }
+        }).next().unwrap().map(|frame| {
+            let employee = frame.get("UNDER").unwrap();
+            let manager = frame.get("OVER").unwrap();
+            format!("{}, {}", employee, manager)
+        }).collect();
+
+        // TODO: improve these tests
+        assert!(underlings_bottom_up.contains("id_10001, id_NULL"));
+        assert!(underlings_bottom_up.contains("id_10005, id_10002"));
+        assert!(underlings_bottom_up.contains("id_10006, id_10004"));
+
+        assert!(!underlings_bottom_up.contains("id_NULL, id_10001"));
+        assert!(!underlings_bottom_up.contains("id_10003, id_10002"));
+        assert!(!underlings_bottom_up.contains("id_10003, id_10007"));
+        
+        let lexer_sn = Lexer::new(query.chars()).map(Result::unwrap);
+        let parser_sn = Parser::new(lexer_sn).map(Result::unwrap);
+
+        let underlings_semi_naive: HashSet<String> = parser_sn.map(|line| {
+            if let ast::Line::Query(t) = line {
+                eval::query_semi_naive(&engine, &cache, t).unwrap()
+            } else {
+                panic!("parsed query as assertion");
+            }
+        }).next().unwrap().map(|frame| {
+            let employee = frame.get("UNDER").unwrap();
+            let manager = frame.get("OVER").unwrap();
+            format!("{}, {}", employee, manager)
+        }).collect();
+
+        assert!(underlings_bottom_up == underlings_semi_naive);
+
+    }
+
 
     #[bench]
-    fn simple_queries(b: &mut test::Bencher) {
+    fn simple_view_query(b: &mut test::Bencher) {
         let engine = StorageEngine::new("test_data/hierarchy".to_string())
-              .unwrap();
+            .unwrap();
+        let cache = cache::ViewCache::new();
         b.iter(|| {
             // TODO: Find a way to move some of this setup outside the benchmark
             // iteration.
-            let cache = cache::ViewCache::new();
             let query = "reports(Emp, Man)?";
             let lexer = Lexer::new(query.chars()).map(Result::unwrap);
             let parser = Parser::new(lexer).map(Result::unwrap);
             for line in parser {
                 if let ast::Line::Query(t) = line {
                     eval::query(&engine, &cache, t).unwrap();
+                } else {
+                    panic!("parsed query as assertion");
+                }
+            }
+        });
+    }
+
+    #[bench]
+    fn recursive_query(b: &mut test::Bencher) {
+        let engine = StorageEngine::new("test_data/hierarchy".to_string())
+              .unwrap();
+        b.iter(|| {
+            let cache = cache::ViewCache::new();
+            let query = "underling(Under, Over)?";
+            let lexer = Lexer::new(query.chars()).map(Result::unwrap);
+            let parser = Parser::new(lexer).map(Result::unwrap);
+            for line in parser {
+                if let ast::Line::Query(t) = line {
+                    eval::query(&engine, &cache, t).unwrap();
+                } else {
+                    panic!("parsed query as assertion");
+                }
+            }
+        });
+    }
+
+    #[bench]
+    fn recursive_query_semi_naive(b: &mut test::Bencher) {
+        let engine = StorageEngine::new("test_data/hierarchy".to_string())
+              .unwrap();
+        b.iter(|| {
+            let cache = cache::ViewCache::new();
+            let query = "underling(Under, Over)?";
+            let lexer = Lexer::new(query.chars()).map(Result::unwrap);
+            let parser = Parser::new(lexer).map(Result::unwrap);
+            for line in parser {
+                if let ast::Line::Query(t) = line {
+                    eval::query_semi_naive(&engine, &cache, t).unwrap();
                 } else {
                     panic!("parsed query as assertion");
                 }
