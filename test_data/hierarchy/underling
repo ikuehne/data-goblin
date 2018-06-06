@@ -1,0 +1,1 @@
+{"contents":{"Intension":{"rules":[[["Low","High"],[{"Compound":{"relation":"reports","params":[{"Variable":"Low"},{"Variable":"High"}]}}]],[["Low","High"],[{"Compound":{"relation":"reports","params":[{"Variable":"Low"},{"Variable":"Mid"}]}},{"Compound":{"relation":"underling","params":[{"Variable":"Mid"},{"Variable":"High"}]}}]]]}},"path":"./data/underling"}

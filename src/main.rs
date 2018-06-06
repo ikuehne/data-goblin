@@ -1,6 +1,7 @@
 #![feature(custom_attribute)]
 #![feature(io)]
 #![feature(option_filter)]
+#![feature(test)]
 #![feature(trait_alias)]
 #![feature(type_ascription)]
 
@@ -32,21 +33,24 @@ mod tests {
     use ast;
     use storage::*;
     use eval;
+    use cache;
     use lexer::Lexer;
     use parser::Parser;
 
     use std::collections::HashSet;
+    extern crate test;
 
     #[test]
     fn simple_sentences() {
         let engine = StorageEngine::new("test_data/grammar".to_string())
             .unwrap();
+        let cache = cache::ViewCache::new();
         let query = "simple_sentence(SUBJECT, VERB, OBJECT)?";
         let lexer = Lexer::new(query.chars()).map(Result::unwrap);
         let parser = Parser::new(lexer).map(Result::unwrap);
         let sentences: HashSet<String> = parser.map(|line| {
             if let ast::Line::Query(t) = line {
-                eval::query(&engine, t).unwrap()
+                eval::query(&engine, &cache, t).unwrap()
             } else {
                 panic!("parsed query as assertion");
             }
@@ -64,6 +68,58 @@ mod tests {
         assert!(!sentences.contains("him throws it"));
         assert!(!sentences.contains("she eat him"));
         assert!(!sentences.contains("i throws it"));
+    }
+
+    #[test]
+    fn employee_hierarchy() {
+
+        let engine = StorageEngine::new("test_data/hierarchy".to_string())
+            .unwrap();
+        let cache = cache::ViewCache::new();
+        let query = "reports(EMP, MAN)?";
+        let lexer = Lexer::new(query.chars()).map(Result::unwrap);
+        let parser = Parser::new(lexer).map(Result::unwrap);
+        let reports: HashSet<String> = parser.map(|line| {
+            if let ast::Line::Query(t) = line {
+                eval::query(&engine, &cache, t).unwrap()
+            } else {
+                panic!("parsed query as assertion");
+            }
+        }).next().unwrap().map(|frame| {
+            let employee = frame.get("EMP").unwrap();
+            let manager = frame.get("MAN").unwrap();
+            format!("{} {}", employee, manager)
+        }).collect();
+
+        assert!(reports.contains("id_10001, id_NULL"));
+        assert!(reports.contains("id_10005, id_10002"));
+        assert!(reports.contains("id_10006, id_10004"));
+
+        assert!(!reports.contains("id_NULL, id_10001"));
+        assert!(!reports.contains("id_10003, id_10002"));
+        assert!(!reports.contains("id_10003, id_10007"));
+    }
+
+
+    #[bench]
+    fn simple_queries(b: &mut test::Bencher) {
+        let engine = StorageEngine::new("test_data/hierarchy".to_string())
+              .unwrap();
+        b.iter(|| {
+            // TODO: Find a way to move some of this setup outside the benchmark
+            // iteration.
+            let cache = cache::ViewCache::new();
+            let query = "reports(Emp, Man)?";
+            let lexer = Lexer::new(query.chars()).map(Result::unwrap);
+            let parser = Parser::new(lexer).map(Result::unwrap);
+            for line in parser {
+                if let ast::Line::Query(t) = line {
+                    eval::query(&engine, &cache, t).unwrap();
+                } else {
+                    panic!("parsed query as assertion");
+                }
+            }
+        });
     }
 }
 

@@ -1,0 +1,1 @@
+{"contents":{"Intension":{"rules":[[["Employee","Manager"],[{"Compound":{"relation":"employee_hierarchy","params":[{"Variable":"Employee"},{"Variable":"Name"},{"Variable":"Salary"},{"Variable":"Manager"}]}}]]]}},"path":"./data/reports"}
