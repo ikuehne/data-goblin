@@ -169,7 +169,7 @@ be joined against `parent(mary, isaac)`, even though this doesn't yield any new
 information. So, in semi-naive evaluation, we would only join the newest
 `ancestor` tuples against the parent relation.
 
-Currently, semi-naive evaluation is only supported for linear recursive rules,
-although it can be used for nonlinear rules. The benchmarks included should show
+Currently, Data Goblin only supports semi-naive evaluation for linear
+recursive rules. The benchmarks included should show
 that semi-naive evaluation is more than five times faster than bottom up in a
 test data set of a 100-person employee hierarchy.
